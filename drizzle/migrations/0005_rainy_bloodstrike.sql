@@ -1,0 +1,1 @@
+ALTER TABLE "profiles" ADD COLUMN "notify_on_signature_needed" boolean DEFAULT true NOT NULL;

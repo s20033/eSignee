@@ -1,0 +1,62 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1783189213416,
+      "tag": "0000_talented_sphinx",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1783195505124,
+      "tag": "0001_happy_mephisto",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1783198072164,
+      "tag": "0002_lonely_switch",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1783261836828,
+      "tag": "0003_spicy_ego",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1783262256046,
+      "tag": "0004_true_moon_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783263275053,
+      "tag": "0005_rainy_bloodstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783292237484,
+      "tag": "0006_glamorous_loa",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783337719810,
+      "tag": "0007_light_molly_hayes",
+      "breakpoints": true
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm uninstall *)",
+      "Bash(node -e ' *)",
+      "Bash(pkill -f \"next-server\")",
+      "Bash(pkill -f \"npm run dev\")",
+      "Bash(host yzzaliijbmskkfxhipxx.supabase.co)",
+      "Bash(nslookup yzzaliijbmskkfxhipxx.supabase.co)",
+      "Bash(host supabase.co)",
+      "Bash(nslookup supabase.co)",
+      "Bash(curl -s -o /dev/null -w \"supabase.com https status: %{http_code}\\\\n\" --max-time 5 https://supabase.com)",
+      "Bash(curl -s -o /dev/null -w \"1.1.1.1 status: %{http_code}\\\\n\" --max-time 5 https://1.1.1.1)",
+      "Bash(host yzzaliijbmskkfxhipxx.supabase.co 1.1.1.1)",
+      "Bash(host supabase.co 8.8.8.8)",
+      "Bash(scutil --dns)",
+      "Bash(networksetup -getairportnetwork en0)",
+      "Bash(kill 82362 82343)",
+      "Bash(TEST_EMAIL=\"esignee-e2e-test-1783295412076@example.com\" TEST_PASSWORD=\"TestPass!1783295412076\" node /Users/suman/Study/My_app/esignee/.e2e-layout2-tmp.js)",
+      "Bash(TEST_EMAIL=\"esignee-e2e-test-1783295412076@example.com\" TEST_PASSWORD=\"TestPass!1783295412076\" TEST_EMPLOYEE_ID=\"b23586bc-ca9b-4ac2-a3e7-bbdde5b229b2\" node /Users/suman/Study/My_app/esignee/.e2e-layout2-tmp.js)",
+      "Bash(TEST_EMAIL=\"esignee-e2e-test-1783295412076@example.com\" TEST_PASSWORD=\"TestPass!1783295412076\" TEST_EMPLOYEE_ID=\"b23586bc-ca9b-4ac2-a3e7-bbdde5b229b2\" SKIP_GENERATE=1 TEST_SIGNING_TOKEN=\"003cb1f8-57ee-4bb3-8b21-8916e4b7924c\" node /Users/suman/Study/My_app/esignee/.e2e-layout2-tmp.js)",
+      "Bash(pdftoppm -png -r 100 final-v2.pdf final-v2-page)",
+      "Bash(rm -f .e2e-layout2-tmp.js)",
+      "Bash(kill 93830 93831)",
+      "Bash(curl -s -o /dev/null -w \"port 3000: %{http_code}\\\\n\" http://localhost:3000 --max-time 2)",
+      "Bash(git init *)",
+      "Bash(git add *)"
+    ]
+  }
+}
