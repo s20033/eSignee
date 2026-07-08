@@ -755,9 +755,11 @@ export const signAsEmployer = async (
     signerLabel: "Pracodawca / Zleceniodawca",
     signerName: profile.companyName,
     signatureDataUrl,
-    consentText: "Podpis reprezentanta pracodawcy/zleceniodawcy potwierdzający zawarcie i warunki niniejszego dokumentu.",
+    consentText: `Podpis reprezentanta ${profile.companyName} potwierdzający zawarcie oraz akceptację warunków niniejszego dokumentu w imieniu administratora danych osobowych.`,
     signedAt: new Date(),
     ipAddress,
+    userAgent,
+    documentTitle: document.title,
     stampUrl: profile.logoUrl,
   });
 

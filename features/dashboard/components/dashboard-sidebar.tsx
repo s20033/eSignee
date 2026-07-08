@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PanelLeftCloseIcon, PanelLeftIcon, FileSignatureIcon } from "lucide-react";
+import { PanelLeftCloseIcon, PanelLeftIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DASHBOARD_NAV_ITEMS, isNavItemActive } from "@/features/dashboard/nav-items";
 
@@ -42,8 +43,8 @@ export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
       )}
     >
       <div className="flex h-14 items-center gap-2 border-b px-4">
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary text-sidebar-primary-foreground">
-          <FileSignatureIcon className="size-4" />
+        <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-sidebar-primary">
+          <Image src="/img/eSignee.png" alt="eSignee" width={28} height={28} className="size-full object-cover" />
         </div>
         {!collapsed && <span className="truncate text-sm font-semibold">{companyName}</span>}
       </div>

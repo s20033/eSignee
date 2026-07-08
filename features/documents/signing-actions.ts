@@ -108,6 +108,8 @@ export const submitEmployeeSignature = async (
     .from(SIGNATURES_BUCKET)
     .upload(signatureImagePath, Buffer.from(signatureBase64, "base64"), { contentType: "image/png" });
 
+  const companyName = session[0].companyName;
+
   for (const { document, employeeName } of session) {
     await logAuditEvent({
       action: "document.consent_accepted",
@@ -129,10 +131,11 @@ export const submitEmployeeSignature = async (
       signerLabel: "Pracownik / Zleceniobiorca",
       signerName: employeeName,
       signatureDataUrl,
-      consentText:
-        "Podpisujący potwierdza zapoznanie się z treścią dokumentu oraz wyraża zgodę na przetwarzanie danych osobowych w zakresie niezbędnym do jego realizacji.",
+      consentText: `Osoba podpisująca oświadcza, że zapoznała się z treścią niniejszego dokumentu i wyraża zgodę na złożenie podpisu elektronicznego (art. 6 ust. 1 lit. a RODO). Administratorem danych osobowych zawartych w dokumencie jest ${companyName}, który przetwarza dane w celu zawarcia i wykonania umowy (art. 6 ust. 1 lit. b RODO). Osobie podpisującej przysługuje prawo dostępu do danych, ich sprostowania, ograniczenia przetwarzania oraz wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.`,
       signedAt,
       ipAddress,
+      userAgent,
+      documentTitle: document.title,
     });
 
     const isTwoParty = document.signatureType === "two-party";

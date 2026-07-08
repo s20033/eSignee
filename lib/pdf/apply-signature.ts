@@ -44,6 +44,8 @@ type ApplySignatureOptions = {
   consentText: string;
   signedAt: Date;
   ipAddress: string | null;
+  userAgent: string | null;
+  documentTitle: string;
   /** Employer's own logo/stamp image URL (profiles.logoUrl) — used as the stamp next to the employer's signature. */
   stampUrl?: string | null;
 };
@@ -90,47 +92,107 @@ export const applySignatureToDocument = async (
   }
 
   const certPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
-  let y = PAGE_HEIGHT - 80;
 
-  certPage.drawText("Potwierdzenie podpisu elektronicznego", {
+  const FRAME_X = MARGIN - 15;
+  const FRAME_Y = 50;
+  const FRAME_WIDTH = CONTENT_WIDTH + 30;
+  const FRAME_HEIGHT = PAGE_HEIGHT - 100;
+  certPage.drawRectangle({
+    x: FRAME_X,
+    y: FRAME_Y,
+    width: FRAME_WIDTH,
+    height: FRAME_HEIGHT,
+    borderColor: COLORS.lightGray,
+    borderWidth: 1,
+  });
+
+  let y = PAGE_HEIGHT - 75;
+
+  certPage.drawText("CERTYFIKAT PODPISU ELEKTRONICZNEGO", {
     x: MARGIN,
     y,
-    size: 14,
+    size: 15,
     font: boldFont,
     color: COLORS.darkBlue,
   });
-  y -= 30;
+  y -= 15;
+  certPage.drawText("Electronic Signature Certificate", { x: MARGIN, y, size: 8, font, color: COLORS.gray });
+  y -= 12;
+  certPage.drawLine({ start: { x: MARGIN, y }, end: { x: PAGE_WIDTH - MARGIN, y }, thickness: 0.75, color: COLORS.lightGray });
+  y -= 24;
 
-  certPage.drawText(`${options.signerLabel}: ${options.signerName}`, { x: MARGIN, y, size: 10, font });
-  y -= 18;
+  const sectionHeader = (label: string) => {
+    certPage.drawText(label, { x: MARGIN, y, size: 10, font: boldFont, color: COLORS.darkBlue });
+    y -= 16;
+  };
 
-  certPage.drawText(`Data i godzina podpisu: ${options.signedAt.toLocaleString("pl-PL")}`, {
-    x: MARGIN,
-    y,
-    size: 10,
-    font,
-  });
-  y -= 18;
+  const field = (label: string, value: string) => {
+    certPage.drawText(label, { x: MARGIN, y, size: 9, font: boldFont, color: COLORS.black });
+    const labelWidth = boldFont.widthOfTextAtSize(`${label} `, 9);
+    for (const line of wrapText(value, font, 9, CONTENT_WIDTH - labelWidth)) {
+      certPage.drawText(line, { x: MARGIN + labelWidth, y, size: 9, font, color: COLORS.black });
+      y -= 13;
+    }
+  };
 
+  sectionHeader("Dokument / Document");
+  field("Tytuł:", options.documentTitle);
+  y -= 8;
+
+  sectionHeader("Osoba podpisująca / Signatory");
+  field("Imię i nazwisko:", options.signerName);
+  field("Rola:", options.signerLabel);
+  y -= 8;
+
+  sectionHeader("Dane techniczne podpisu / Signature technical data");
+  field("Data i godzina:", `${options.signedAt.toLocaleString("pl-PL", { dateStyle: "long", timeStyle: "medium" })} (czas lokalny)`);
   if (options.ipAddress) {
-    certPage.drawText(`Adres IP: ${options.ipAddress}`, { x: MARGIN, y, size: 10, font });
-    y -= 18;
+    field("Adres IP:", options.ipAddress);
   }
+  if (options.userAgent) {
+    field("Przeglądarka:", options.userAgent);
+  }
+  y -= 8;
 
-  y -= 10;
+  sectionHeader("Podstawa prawna i zgoda / Legal basis & consent");
   for (const line of wrapText(options.consentText, font, 9, CONTENT_WIDTH)) {
     certPage.drawText(line, { x: MARGIN, y, size: 9, font, color: rgb(0.3, 0.3, 0.3) });
     y -= 13;
   }
-  y -= 17;
+  y -= 12;
 
-  const certDims = signatureImage.scaleToFit(220, 90);
-  certPage.drawImage(signatureImage, {
+  certPage.drawText("Podpis / Signature:", { x: MARGIN, y, size: 9, font: boldFont, color: COLORS.black });
+  y -= 10;
+
+  const certDims = signatureImage.scaleToFit(220, 80);
+  certPage.drawRectangle({
     x: MARGIN,
+    y: y - certDims.height - 8,
+    width: certDims.width + 16,
+    height: certDims.height + 16,
+    borderColor: COLORS.lightGray,
+    borderWidth: 0.75,
+  });
+  certPage.drawImage(signatureImage, {
+    x: MARGIN + 8,
     y: y - certDims.height,
     width: certDims.width,
     height: certDims.height,
   });
+
+  // Pinned near the bottom of the frame (not immediately following the content above),
+  // so the certificate reads like a fixed template regardless of how long the fields above are.
+  // Wrapped narrower than the full content width to leave the bottom-right verification QR
+  // (embedded separately, after this function runs — see embed-verification-qr.ts) clear.
+  const DISCLAIMER_WIDTH = CONTENT_WIDTH - 100;
+  const disclaimer =
+    "Niniejszy certyfikat potwierdza złożenie prostego podpisu elektronicznego w rozumieniu art. 3 pkt 10 rozporządzenia eIDAS (UE nr 910/2014). Dane osobowe przetwarzane są zgodnie z Rozporządzeniem Parlamentu Europejskiego i Rady (UE) 2016/679 (RODO).";
+  const disclaimerLines = wrapText(disclaimer, font, 7, DISCLAIMER_WIDTH);
+  let footerY = FRAME_Y + 16 + disclaimerLines.length * 10;
+  for (const line of disclaimerLines) {
+    footerY -= 10;
+    certPage.drawText(line, { x: MARGIN, y: footerY, size: 7, font, color: COLORS.gray });
+  }
 
   return pdfDoc.save();
 };

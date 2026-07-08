@@ -59,7 +59,7 @@ const SignPage = async ({ params }: SignPageProps) => {
         ))}
       </ul>
 
-      <SignForm token={token} />
+      <SignForm token={token} companyName={companyName} />
     </div>
   );
 };

@@ -40,8 +40,17 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# claude code local settings (machine-specific permissions)
+# claude code local settings (machine-specific permissions, accumulates
+# session-specific data like test credentials — never meant to be shared)
+.claude/settings.json
 .claude/settings.local.json
 
 # local ad-hoc test scripts
 .e2e-*-tmp.js
+
+# internal project notes — not needed to run/deploy the app, kept local-only
+ARCHITECTURE.md
+Claude.md
+DEPLOYMENT.md
+PROJECT.md
+TASKS.md

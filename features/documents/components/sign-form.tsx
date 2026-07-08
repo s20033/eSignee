@@ -10,9 +10,10 @@ import { submitEmployeeSignature } from "../signing-actions";
 
 type SignFormProps = {
   token: string;
+  companyName: string;
 };
 
-export const SignForm = ({ token }: SignFormProps) => {
+export const SignForm = ({ token, companyName }: SignFormProps) => {
   const router = useRouter();
   const signatureRef = useRef<SignaturePadHandle>(null);
   const [consent, setConsent] = useState(false);
@@ -58,11 +59,18 @@ export const SignForm = ({ token }: SignFormProps) => {
     <div className="space-y-6">
       <div className="flex items-start gap-3 rounded-lg border p-4">
         <Checkbox checked={consent} onCheckedChange={(value) => setConsent(value === true)} />
-        <Label className="font-normal leading-snug">
-          I consent to the processing of my personal data contained in this document by the
-          employer, for the purpose of concluding and performing this agreement, in accordance
-          with GDPR (Regulation (EU) 2016/679). I understand I may withdraw this consent at any
-          time where processing is based on consent.
+        {/* Label is `display: flex` (for the common icon+short-text case) — a single wrapping
+            span keeps this multi-line paragraph as one flex item so it wraps normally instead of
+            the nested <strong> becoming its own column. */}
+        <Label className="font-normal leading-snug text-sm">
+          <span className="block">
+            I consent to signing this document electronically (Art. 6(1)(a) GDPR/RODO). The data
+            controller, <strong>{companyName}</strong>, processes the personal data contained in
+            this document to conclude and perform this agreement (Art. 6(1)(b) GDPR/RODO). I have
+            the right to access, rectify, or restrict processing of my data, and to lodge a
+            complaint with the Polish data protection authority (UODO) or my local supervisory
+            authority.
+          </span>
         </Label>
       </div>
 
