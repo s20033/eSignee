@@ -43,8 +43,8 @@ export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
       )}
     >
       <div className="flex h-14 items-center gap-2 border-b px-4">
-        <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-sidebar-primary">
-          <Image src="/img/eSignee.png" alt="eSignee" width={28} height={28} className="size-full object-cover" />
+        <div className="flex size-7 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white p-1">
+          <Image src="/img/eSignee.png" alt="eSignee" width={28} height={28} className="size-full object-contain" />
         </div>
         {!collapsed && <span className="truncate text-sm font-semibold">{companyName}</span>}
       </div>
