@@ -2,12 +2,14 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { DOCUMENT_CATEGORY_LABELS } from "@/lib/documents/category-labels";
 import { createTemplate, updateTemplate } from "../actions";
 import { extractPlaceholders, templateFormSchema, type TemplateFormValues } from "../schema";
 
@@ -23,11 +25,14 @@ export const TemplateForm = ({ templateId, defaultValues }: TemplateFormProps) =
     register,
     handleSubmit,
     watch,
+    control,
     formState: { errors, isSubmitting },
   } = useForm<TemplateFormValues>({
     resolver: zodResolver(templateFormSchema),
-    defaultValues: defaultValues ?? { name: "", content: "" },
+    defaultValues: defaultValues ?? { name: "", content: "", category: "hr", customCategoryLabel: "" },
   });
+
+  const category = watch("category");
 
   const placeholders = extractPlaceholders(watch("content") ?? "");
 
@@ -53,6 +58,41 @@ export const TemplateForm = ({ templateId, defaultValues }: TemplateFormProps) =
         <Input id="name" {...register("name")} />
         {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
       </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="category">Category</Label>
+        <Controller
+          name="category"
+          control={control}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={field.onChange}>
+              <SelectTrigger id="category" className="w-full">
+                <SelectValue>
+                  {(value: keyof typeof DOCUMENT_CATEGORY_LABELS) => DOCUMENT_CATEGORY_LABELS[value]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(DOCUMENT_CATEGORY_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+        {errors.category && <p className="text-sm text-destructive">{errors.category.message}</p>}
+      </div>
+
+      {category === "custom" && (
+        <div className="space-y-2">
+          <Label htmlFor="customCategoryLabel">Custom category name</Label>
+          <Input id="customCategoryLabel" {...register("customCategoryLabel")} />
+          {errors.customCategoryLabel && (
+            <p className="text-sm text-destructive">{errors.customCategoryLabel.message}</p>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="content">Content</Label>

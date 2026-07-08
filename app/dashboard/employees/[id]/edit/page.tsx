@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { Breadcrumbs } from "@/components/shared/breadcrumbs";
 import { EmployeeForm } from "@/features/employees/components/employee-form";
 import { getEmployeeById } from "@/features/employees/actions";
 
@@ -16,6 +17,13 @@ const EditEmployeePage = async ({ params }: EditEmployeePageProps) => {
 
   return (
     <div className="space-y-6">
+      <Breadcrumbs
+        items={[
+          { label: "Employees", href: "/dashboard/employees" },
+          { label: employee.fullName },
+          { label: "Edit" },
+        ]}
+      />
       <h1 className="text-2xl font-semibold">Edit employee</h1>
       <EmployeeForm
         employeeId={employee.id}

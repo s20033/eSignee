@@ -8,7 +8,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { DeleteTemplateDialog } from "./delete-template-dialog";
+import { documentCategoryLabel } from "@/lib/documents/category-labels";
 import type { Template } from "@/types/template";
 
 type TemplateTableProps = {
@@ -25,6 +27,7 @@ export const TemplateTable = ({ templates }: TemplateTableProps) => {
       <TableHeader>
         <TableRow>
           <TableHead>Name</TableHead>
+          <TableHead>Category</TableHead>
           <TableHead>Placeholders</TableHead>
           <TableHead className="text-right">Actions</TableHead>
         </TableRow>
@@ -38,6 +41,9 @@ export const TemplateTable = ({ templates }: TemplateTableProps) => {
           return (
             <TableRow key={template.id}>
               <TableCell>{template.name}</TableCell>
+              <TableCell>
+                <Badge variant="secondary">{documentCategoryLabel(template)}</Badge>
+              </TableCell>
               <TableCell className="text-muted-foreground">
                 {placeholders.length > 0 ? placeholders.join(", ") : "—"}
               </TableCell>

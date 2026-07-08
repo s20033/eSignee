@@ -75,7 +75,9 @@ export const applySignatureToDocument = async (
   if (rect && options.layout) {
     const page = pdfDoc.getPage(options.layout.pageIndex);
     const dims = signatureImage.scaleToFit(rect.maxWidth, rect.maxHeight);
-    page.drawImage(signatureImage, { x: rect.x, y: rect.y, width: dims.width, height: dims.height });
+    const signatureX = rect.x + (rect.maxWidth - dims.width) / 2;
+    const signatureY = rect.y + (rect.maxHeight - dims.height) / 2;
+    page.drawImage(signatureImage, { x: signatureX, y: signatureY, width: dims.width, height: dims.height });
 
     if (options.role === "employer" && options.layout.employer && options.stampUrl) {
       const stampImage = await embedImageFromUrl(pdfDoc, options.stampUrl);

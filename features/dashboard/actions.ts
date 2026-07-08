@@ -1,6 +1,6 @@
 "use server";
 
-import { and, asc, count, desc, eq, isNotNull, isNull, ne } from "drizzle-orm";
+import { and, asc, count, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLogs, documents, employees, templates } from "@/drizzle/schema";
 import { getCurrentProfile } from "@/lib/auth/get-current-profile";
@@ -74,6 +74,7 @@ export const getUpcomingContractExpirations = async () => {
         eq(documents.employerId, profile.id),
         isNotNull(documents.expiresAt),
         ne(documents.status, "archived"),
+        isNull(employees.deletedAt),
       ),
     )
     .orderBy(asc(documents.expiresAt))
@@ -81,4 +82,27 @@ export const getUpcomingContractExpirations = async () => {
 
   // The isNotNull filter above guarantees expiresAt is set; narrow the type to match.
   return rows.map((row) => ({ ...row, expiresAt: row.expiresAt as string }));
+};
+
+/** Documents generated per month, zero-filled, oldest first — powers the dashboard's monthly trend chart. */
+export const getMonthlyDocumentCounts = async (monthsBack = 6) => {
+  const profile = await getCurrentProfile();
+
+  const rows = await db
+    .select({
+      month: sql<string>`to_char(${documents.createdAt}, 'YYYY-MM')`,
+      count: count(),
+    })
+    .from(documents)
+    .where(eq(documents.employerId, profile.id))
+    .groupBy(sql`to_char(${documents.createdAt}, 'YYYY-MM')`);
+
+  const countsByMonth = new Map(rows.map((row) => [row.month, row.count]));
+
+  const now = new Date();
+  return Array.from({ length: monthsBack }, (_, i) => {
+    const date = new Date(now.getFullYear(), now.getMonth() - (monthsBack - 1 - i), 1);
+    const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    return { month, count: countsByMonth.get(month) ?? 0 };
+  });
 };

@@ -6,18 +6,20 @@ import { db } from "@/lib/db";
 import { templates } from "@/drizzle/schema";
 import { getCurrentProfile } from "@/lib/auth/get-current-profile";
 import { logAuditEvent } from "@/lib/audit/log";
+import type { DocumentCategory } from "@/lib/documents/category-labels";
 import { extractPlaceholders, templateFormSchema } from "./schema";
 
 const PAGE_SIZE = 10;
 
 export type TemplateActionResult = { success: true } | { success: false; error: string };
 
-export const listTemplates = async (search: string, page: number) => {
+export const listTemplates = async (search: string, page: number, category?: DocumentCategory) => {
   const profile = await getCurrentProfile();
 
   const whereClause = and(
     eq(templates.employerId, profile.id),
     isNull(templates.deletedAt),
+    category ? eq(templates.category, category) : undefined,
     search ? ilike(templates.name, `%${search}%`) : undefined,
   );
 
@@ -40,7 +42,13 @@ export const listTemplatesForPicker = async () => {
   const profile = await getCurrentProfile();
 
   const rows = await db
-    .select({ id: templates.id, name: templates.name, placeholders: templates.placeholders })
+    .select({
+      id: templates.id,
+      name: templates.name,
+      placeholders: templates.placeholders,
+      category: templates.category,
+      customCategoryLabel: templates.customCategoryLabel,
+    })
     .from(templates)
     .where(and(eq(templates.employerId, profile.id), isNull(templates.deletedAt)))
     .orderBy(asc(templates.name));
@@ -80,6 +88,8 @@ export const createTemplate = async (values: unknown): Promise<TemplateActionRes
       name: parsed.data.name,
       content: parsed.data.content,
       placeholders: extractPlaceholders(parsed.data.content),
+      category: parsed.data.category,
+      customCategoryLabel: parsed.data.category === "custom" ? parsed.data.customCategoryLabel || null : null,
     })
     .returning({ id: templates.id });
 
@@ -110,6 +120,8 @@ export const updateTemplate = async (
       name: parsed.data.name,
       content: parsed.data.content,
       placeholders: extractPlaceholders(parsed.data.content),
+      category: parsed.data.category,
+      customCategoryLabel: parsed.data.category === "custom" ? parsed.data.customCategoryLabel || null : null,
       updatedAt: new Date(),
     })
     .where(and(eq(templates.id, id), eq(templates.employerId, profile.id)));

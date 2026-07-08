@@ -1,7 +1,8 @@
 import { SignForm } from "@/features/documents/components/sign-form";
 import {
-  getDocumentBySigningToken,
-  getSigningDocumentPreviewUrl,
+  getSigningSession,
+  getSigningSessionPreviewUrls,
+  logDocumentViewed,
 } from "@/features/documents/signing-actions";
 
 type SignPageProps = {
@@ -10,9 +11,9 @@ type SignPageProps = {
 
 const SignPage = async ({ params }: SignPageProps) => {
   const { token } = await params;
-  const row = await getDocumentBySigningToken(token);
+  const session = await getSigningSession(token);
 
-  if (!row) {
+  if (session.length === 0) {
     return (
       <div className="mx-auto max-w-md space-y-2 px-4 py-16 text-center">
         <h1 className="text-xl font-semibold">Link no longer valid</h1>
@@ -23,27 +24,40 @@ const SignPage = async ({ params }: SignPageProps) => {
     );
   }
 
-  const previewUrl = await getSigningDocumentPreviewUrl(token);
+  const previews = await getSigningSessionPreviewUrls(token);
+  await Promise.all(session.map(({ document }) => logDocumentViewed(document.id)));
+
+  const { companyName, employeeName } = session[0];
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-10">
       <div>
-        <h1 className="text-2xl font-semibold">{row.document.title}</h1>
+        <h1 className="text-2xl font-semibold">
+          {session.length === 1 ? session[0].document.title : `${session.length} documents to sign`}
+        </h1>
         <p className="text-sm text-muted-foreground">
-          Sent by {row.companyName} to {row.employeeName}
+          Sent by {companyName} to {employeeName}
         </p>
       </div>
 
-      {previewUrl && (
-        <a
-          href={previewUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-block text-sm text-primary underline"
-        >
-          View document (PDF)
-        </a>
-      )}
+      <ul className="space-y-1">
+        {previews.map((preview) => (
+          <li key={preview.documentId} className="text-sm">
+            {preview.previewUrl ? (
+              <a
+                href={preview.previewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary underline"
+              >
+                {preview.title} (PDF)
+              </a>
+            ) : (
+              <span className="text-muted-foreground">{preview.title}</span>
+            )}
+          </li>
+        ))}
+      </ul>
 
       <SignForm token={token} />
     </div>

@@ -1,0 +1,20 @@
+/** Shared label map for audit_logs.action values — used by both the flat AuditTrail and the vertical DocumentTimeline so the two never drift apart. */
+export const ACTION_LABELS: Record<string, string> = {
+  "document.generated": "Generated",
+  "document.sent": "Sent",
+  "document.viewed": "Viewed",
+  "document.consent_accepted": "Consent accepted",
+  "document.signed_by_employee": "Signed by employee",
+  "document.signed_by_employer": "Signed by employer",
+  "document.completed": "Completed",
+  "document.downloaded": "Downloaded",
+  "document.verified": "Verified",
+  "document.deleted": "Deleted",
+  "document.restored": "Restored",
+  "employee.created": "Employee created",
+  "employee.updated": "Employee updated",
+  "employee.deleted": "Employee deleted",
+  "template.created": "Template created",
+  "template.updated": "Template updated",
+  "template.deleted": "Template deleted",
+};

@@ -23,6 +23,8 @@
   --color-chart-3: var(--chart-3);
   --color-chart-2: var(--chart-2);
   --color-chart-1: var(--chart-1);
+  --color-status-good: var(--status-good);
+  --color-status-warning: var(--status-warning);
   --color-ring: var(--ring);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -72,6 +74,10 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  /* Fixed status hues (document lifecycle: pending action / done) — reserved,
+     never reassigned to a series, same value in light and dark. */
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -107,6 +113,8 @@
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
+  --status-good: #0ca30c;
+  --status-warning: #fab219;
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);

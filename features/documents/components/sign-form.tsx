@@ -22,14 +22,14 @@ export const SignForm = ({ token }: SignFormProps) => {
 
   const onSubmit = async () => {
     setError(null);
-    const signatureDataUrl = signatureRef.current?.getDataUrl();
+    const signatureDataUrl = await signatureRef.current?.getDataUrl();
 
     if (!consent) {
       setError("You must consent to data processing to sign.");
       return;
     }
     if (!signatureDataUrl) {
-      setError("Please draw your signature above.");
+      setError("Please provide your signature above.");
       return;
     }
 
@@ -67,7 +67,7 @@ export const SignForm = ({ token }: SignFormProps) => {
       </div>
 
       <div className="space-y-2">
-        <Label>Draw your signature</Label>
+        <Label>Your signature</Label>
         <SignaturePad ref={signatureRef} />
       </div>
 

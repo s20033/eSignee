@@ -166,14 +166,15 @@ export const drawSignatureBlock = (
     });
     cursor.page.drawText(name, { x, y: lineYPos - 10, size: 8, font: fonts.regular, color: COLORS.gray });
 
+    // The stamp sits on the left of the placeholder, with the signature drawn to its right.
     const rect: SignatureRect = {
-      x,
+      x: reserveStampSpace ? x + STAMP_SIZE + 15 : x,
       y: lineYPos,
       maxWidth: reserveStampSpace ? colWidth - STAMP_SIZE - 15 : colWidth,
       maxHeight: SIGNATURE_SLOT_HEIGHT,
     };
     const stamp = reserveStampSpace
-      ? { x: x + colWidth - STAMP_SIZE, y: lineYPos + (SIGNATURE_SLOT_HEIGHT - STAMP_SIZE) / 2, size: STAMP_SIZE }
+      ? { x, y: lineYPos + (SIGNATURE_SLOT_HEIGHT - STAMP_SIZE) / 2, size: STAMP_SIZE }
       : undefined;
 
     return { rect, stamp };

@@ -45,7 +45,7 @@ export const EmployeeTable = ({ employees }: EmployeeTableProps) => {
                 nativeButton={false}
                 render={<Link href={`/dashboard/employees/${employee.id}/documents`} />}
               >
-                Documents
+                View
               </Button>
               <Button
                 variant="ghost"

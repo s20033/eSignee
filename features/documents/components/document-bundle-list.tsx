@@ -1,9 +1,11 @@
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { DownloadDocumentButton } from "./download-document-button";
 import { CopySigningLinkButton } from "./copy-signing-link-button";
 import { SignAsEmployerDialog } from "./sign-as-employer-dialog";
 import { DOCUMENT_STATUS_LABELS } from "@/lib/documents/status-labels";
+import { documentCategoryLabel } from "@/lib/documents/category-labels";
 import type { Document } from "@/types/document";
 
 type DocumentBundleListProps = {
@@ -33,8 +35,11 @@ export const DocumentBundleList = ({ bundles }: DocumentBundleListProps) => {
             {documents.map((document) => (
               <li key={document.id} className="flex items-center justify-between gap-3 text-sm">
                 <div className="flex items-center gap-2">
-                  <span>{document.title}</span>
+                  <Link href={`/dashboard/documents/${document.id}`} className="hover:underline">
+                    {document.title}
+                  </Link>
                   <Badge variant="outline">{DOCUMENT_STATUS_LABELS[document.status]}</Badge>
+                  <Badge variant="secondary">{documentCategoryLabel(document)}</Badge>
                 </div>
                 <div className="flex items-center">
                   {document.status === "waiting" && document.signingToken && (

@@ -1,0 +1,1 @@
+ALTER TABLE "documents" DROP CONSTRAINT "documents_signing_token_unique";

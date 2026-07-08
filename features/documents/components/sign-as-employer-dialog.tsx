@@ -25,9 +25,9 @@ export const SignAsEmployerDialog = ({ documentId }: SignAsEmployerDialogProps) 
 
   const onConfirm = async () => {
     setError(null);
-    const signatureDataUrl = signatureRef.current?.getDataUrl();
+    const signatureDataUrl = await signatureRef.current?.getDataUrl();
     if (!signatureDataUrl) {
-      setError("Please draw a signature.");
+      setError("Please provide a signature.");
       return;
     }
 

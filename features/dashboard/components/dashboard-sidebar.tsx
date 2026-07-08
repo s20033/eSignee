@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftIcon, FileSignatureIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DASHBOARD_NAV_ITEMS } from "@/features/dashboard/nav-items";
+import { DASHBOARD_NAV_ITEMS, isNavItemActive } from "@/features/dashboard/nav-items";
 
 const STORAGE_KEY = "dashboard-sidebar-collapsed";
 
@@ -16,9 +16,13 @@ type DashboardSidebarProps = {
 export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
+  // The real state only exists in localStorage, so it's read after mount — `mounted`
+  // gates the width transition so that correction is an instant snap, not an animated flash.
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     setCollapsed(window.localStorage.getItem(STORAGE_KEY) === "1");
+    setMounted(true);
   }, []);
 
   const toggleCollapsed = () => {
@@ -32,7 +36,8 @@ export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
   return (
     <aside
       className={cn(
-        "sticky top-0 hidden h-screen shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground transition-[width] duration-200 md:flex",
+        "sticky top-0 hidden h-screen shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground md:flex",
+        mounted && "transition-[width] duration-200",
         collapsed ? "w-16" : "w-60"
       )}
     >
@@ -45,8 +50,7 @@ export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
 
       <nav className="flex-1 space-y-1 p-2">
         {DASHBOARD_NAV_ITEMS.map((item) => {
-          const isActive =
-            item.href === "/dashboard" ? pathname === item.href : pathname.startsWith(item.href);
+          const isActive = isNavItemActive(pathname, item.href);
           const Icon = item.icon;
 
           return (

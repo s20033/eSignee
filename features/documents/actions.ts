@@ -1,10 +1,11 @@
 "use server";
 
 import { randomUUID } from "node:crypto";
+import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { and, desc, eq } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { auditLogs, documents, employees, signatures } from "@/drizzle/schema";
+import { auditLogs, documents, documentVersions, employees, signatures } from "@/drizzle/schema";
 import { getCurrentProfile } from "@/lib/auth/get-current-profile";
 import { createClient } from "@/lib/supabase/server";
 import { generateDocumentBundle } from "@/lib/documents/generate-bundle";
@@ -16,13 +17,16 @@ import { getJobPositionById } from "@/lib/legal/job-positions";
 import { FOREIGNER_DOCUMENT_LABELS } from "@/lib/legal/constants";
 import { getAppOrigin } from "@/lib/get-app-origin";
 import { sendEmail } from "@/lib/email/send";
-import { documentCompletedEmail, signingInvitationEmail } from "@/lib/email/templates";
-import { logAuditEvent } from "@/lib/audit/log";
+import { documentCompletedEmail, employerSignatureNeededEmail, signingInvitationEmail } from "@/lib/email/templates";
+import { logAuditEvent, listDocumentTimeline, countDocumentVerifications } from "@/lib/audit/log";
+import { recordDocumentVersion, listDocumentVersions } from "@/lib/documents/document-service";
 import type { BundleInput, SignatureType } from "@/lib/documents/types";
+import type { DocumentCategory } from "@/lib/documents/category-labels";
+import type { Document } from "@/types/document";
 import { templates } from "@/drizzle/schema";
 import { renderTemplateDocumentToPdf } from "@/lib/pdf/render-template";
 import { extractPlaceholders, substitutePlaceholders } from "@/features/templates/schema";
-import { contractBuilderSchema, type ContractBuilderValues, generateFromTemplateSchema } from "./schema";
+import { contractBuilderSchema, type ContractBuilderValues, generateFromTemplatesSchema } from "./schema";
 
 const DOCUMENTS_BUCKET = "documents";
 const SIGNATURES_BUCKET = "signatures";
@@ -43,13 +47,21 @@ type PersistDocumentInput = {
   expiresAt: string | null;
   pdfBytes: Uint8Array;
   origin: string;
+  // Caller decides: a fresh token per document (Contract Builder) or one shared
+  // token across every document in a batch (a "signing session" — see
+  // generateDocumentsFromTemplates). Null when no employee signature is needed.
+  signingToken: string | null;
+  // Defaults to "hr"/null (the documents table's own defaults) when omitted —
+  // Contract Builder documents don't set these explicitly.
+  category?: DocumentCategory;
+  customCategoryLabel?: string | null;
 };
 
 type PersistDocumentResult =
-  | { success: true; signingLink: { title: string; token: string } | null }
+  | { success: true; documentId: string; signingLink: { title: string; token: string } | null }
   | { success: false; error: string };
 
-/** Shared by generateContractBundle and generateDocumentFromTemplate: uploads the rendered PDF, inserts the documents row, and logs the audit event. */
+/** Shared by generateContractBundle and generateDocumentsFromTemplates: uploads the rendered PDF, inserts the documents row, and logs the audit event. */
 const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<PersistDocumentResult> => {
   const supabase = await createClient();
   let pdfBytes = input.pdfBytes;
@@ -69,7 +81,7 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
   }
 
   const needsEmployeeSignature = input.signatureType === "employee" || input.signatureType === "two-party";
-  const signingToken = needsEmployeeSignature ? randomUUID() : null;
+  const signingToken = needsEmployeeSignature ? input.signingToken : null;
 
   const [createdDocument] = await db
     .insert(documents)
@@ -88,6 +100,7 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
       pdfUrl: storagePath,
       finalPdfUrl: input.signatureType === null ? storagePath : null,
       signingToken,
+      ...(input.category ? { category: input.category, customCategoryLabel: input.customCategoryLabel ?? null } : {}),
     })
     .returning({ id: documents.id });
 
@@ -98,7 +111,19 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
     metadata: { kind: input.kind, bundleId: input.bundleId },
   });
 
-  return { success: true, signingLink: signingToken ? { title: input.title, token: signingToken } : null };
+  await recordDocumentVersion({
+    documentId: createdDocument.id,
+    pdfBytes,
+    pdfUrl: storagePath,
+    note: "Generated",
+    actorEmail: input.actorEmail,
+  });
+
+  return {
+    success: true,
+    documentId: createdDocument.id,
+    signingLink: signingToken ? { title: input.title, token: signingToken } : null,
+  };
 };
 
 const toBundleInput = (
@@ -218,6 +243,7 @@ export const generateContractBundle = async (
       expiresAt: MAIN_CONTRACT_KINDS.includes(doc.id) ? parsed.data.endDate || null : null,
       pdfBytes,
       origin,
+      signingToken: doc.signature === "employee" || doc.signature === "two-party" ? randomUUID() : null,
     });
 
     if (!result.success) {
@@ -247,13 +273,18 @@ export const generateContractBundle = async (
   return { success: true, bundleId };
 };
 
-/** Fills an employer-authored {{placeholder}} template for one employee and starts the same sign/send flow as generateContractBundle. */
-export const generateDocumentFromTemplate = async (
+/**
+ * Fills one or more employer-authored {{placeholder}} templates for one employee — only the
+ * checked templates are generated. Every generated document that needs an employee signature
+ * shares one signing-session token, so the employee gets a single link that covers the whole
+ * batch instead of one email per document.
+ */
+export const generateDocumentsFromTemplates = async (
   employeeId: string,
   values: unknown,
 ): Promise<GenerateBundleResult> => {
   const profile = await getCurrentProfile();
-  const parsed = generateFromTemplateSchema.safeParse(values);
+  const parsed = generateFromTemplatesSchema.safeParse(values);
 
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
@@ -269,76 +300,310 @@ export const generateDocumentFromTemplate = async (
     return { success: false, error: "Employee not found" };
   }
 
-  const [template] = await db
+  const selectedTemplates = await db
     .select()
     .from(templates)
-    .where(and(eq(templates.id, parsed.data.templateId), eq(templates.employerId, profile.id)))
-    .limit(1);
+    .where(
+      and(
+        inArray(templates.id, parsed.data.templateIds),
+        eq(templates.employerId, profile.id),
+        isNull(templates.deletedAt),
+      ),
+    );
 
-  if (!template) {
-    return { success: false, error: "Template not found" };
+  if (selectedTemplates.length !== parsed.data.templateIds.length) {
+    return { success: false, error: "One or more selected templates could not be found." };
   }
 
-  const missing = extractPlaceholders(template.content).filter((name) => !parsed.data.values[name]?.trim());
-  if (missing.length > 0) {
-    return { success: false, error: `Missing value for {{${missing[0]}}}` };
+  for (const template of selectedTemplates) {
+    const missing = extractPlaceholders(template.content).filter((name) => !parsed.data.values[name]?.trim());
+    if (missing.length > 0) {
+      return { success: false, error: `Missing value for {{${missing[0]}}} (used in "${template.name}")` };
+    }
   }
-
-  const body = substitutePlaceholders(template.content, parsed.data.values);
-  const { bytes: pdfBytes, signatureLayout } = await renderTemplateDocumentToPdf(
-    template.name,
-    body,
-    {
-      name: profile.companyName,
-      address: profile.address,
-      taxId: profile.taxId,
-      regon: profile.regon,
-      krs: profile.krs,
-    },
-    {
-      employeeName: employee.fullName,
-      signDate: new Date().toLocaleDateString("pl-PL"),
-      signatureType: parsed.data.signatureType,
-    },
-  );
 
   const bundleId = randomUUID();
   const origin = await getAppOrigin();
+  const needsEmployeeSignature = parsed.data.signatureType === "employee" || parsed.data.signatureType === "two-party";
+  const sessionToken = needsEmployeeSignature ? randomUUID() : null;
+  const pendingDocuments: { documentId: string; title: string }[] = [];
 
-  const result = await persistGeneratedDocument({
-    profileId: profile.id,
-    actorEmail: profile.email,
-    employeeId,
-    bundleId,
-    documentId: randomUUID(),
-    title: template.name,
-    kind: null,
-    templateId: template.id,
-    signatureType: parsed.data.signatureType,
-    signatureLayout,
-    expiresAt: null,
-    pdfBytes,
-    origin,
-  });
+  for (const template of selectedTemplates) {
+    const body = substitutePlaceholders(template.content, parsed.data.values);
+    const { bytes: pdfBytes, signatureLayout } = await renderTemplateDocumentToPdf(
+      template.name,
+      body,
+      {
+        name: profile.companyName,
+        address: profile.address,
+        taxId: profile.taxId,
+        regon: profile.regon,
+        krs: profile.krs,
+      },
+      {
+        employeeName: employee.fullName,
+        signDate: new Date().toLocaleDateString("pl-PL"),
+        signatureType: parsed.data.signatureType,
+      },
+    );
 
-  if (!result.success) {
-    return result;
+    const result = await persistGeneratedDocument({
+      profileId: profile.id,
+      actorEmail: profile.email,
+      employeeId,
+      bundleId,
+      documentId: randomUUID(),
+      title: template.name,
+      kind: null,
+      templateId: template.id,
+      signatureType: parsed.data.signatureType,
+      signatureLayout,
+      expiresAt: null,
+      pdfBytes,
+      origin,
+      signingToken: sessionToken,
+      category: template.category,
+      customCategoryLabel: template.customCategoryLabel,
+    });
+
+    if (!result.success) {
+      return result;
+    }
+    if (result.signingLink) {
+      pendingDocuments.push({ documentId: result.documentId, title: result.signingLink.title });
+    }
   }
 
-  if (result.signingLink && employee.email) {
+  if (sessionToken && pendingDocuments.length > 0 && employee.email) {
     await sendEmail({
       to: employee.email,
       subject: `${profile.companyName}: documents to sign`,
       html: signingInvitationEmail({
         employeeName: employee.fullName,
         companyName: profile.companyName,
-        documents: [{ title: result.signingLink.title, signingUrl: `${origin}/sign/${result.signingLink.token}` }],
+        documents: pendingDocuments.map(({ title }) => ({ title, signingUrl: `${origin}/sign/${sessionToken}` })),
       }),
     });
+    for (const { documentId } of pendingDocuments) {
+      await logAuditEvent({
+        action: "document.sent",
+        actorEmail: profile.email,
+        documentId,
+        metadata: { to: employee.email, bundleId, sessionDocumentCount: pendingDocuments.length },
+      });
+    }
   }
 
   revalidatePath(`/dashboard/employees/${employeeId}/documents`);
   return { success: true, bundleId };
+};
+
+const DOCUMENTS_PAGE_SIZE = 10;
+
+export type DocumentListItem = {
+  id: string;
+  title: string;
+  status: Document["status"];
+  category: Document["category"];
+  customCategoryLabel: string | null;
+  createdAt: Date;
+  employeeId: string;
+  employeeName: string;
+};
+
+export type ListDocumentsFilters = {
+  status?: Document["status"];
+  category?: Document["category"];
+};
+
+/** Cross-employee document index for the dashboard's Documents list page. Excludes soft-deleted documents. */
+export const listDocuments = async (
+  search: string,
+  page: number,
+  filters: ListDocumentsFilters = {},
+) => {
+  const profile = await getCurrentProfile();
+
+  const whereClause = and(
+    eq(documents.employerId, profile.id),
+    isNull(documents.deletedAt),
+    isNull(employees.deletedAt),
+    filters.status ? eq(documents.status, filters.status) : undefined,
+    filters.category ? eq(documents.category, filters.category) : undefined,
+    search
+      ? or(ilike(documents.title, `%${search}%`), ilike(employees.fullName, `%${search}%`))
+      : undefined,
+  );
+
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({
+        id: documents.id,
+        title: documents.title,
+        status: documents.status,
+        category: documents.category,
+        customCategoryLabel: documents.customCategoryLabel,
+        createdAt: documents.createdAt,
+        employeeId: employees.id,
+        employeeName: employees.fullName,
+      })
+      .from(documents)
+      .innerJoin(employees, eq(documents.employeeId, employees.id))
+      .where(whereClause)
+      .orderBy(desc(documents.createdAt))
+      .limit(DOCUMENTS_PAGE_SIZE)
+      .offset((page - 1) * DOCUMENTS_PAGE_SIZE),
+    db
+      .select({ total: count() })
+      .from(documents)
+      .innerJoin(employees, eq(documents.employeeId, employees.id))
+      .where(whereClause),
+  ]);
+
+  return { documents: rows, total, pageSize: DOCUMENTS_PAGE_SIZE };
+};
+
+/** Full detail for one document: metadata, version history, timeline, and verification count. */
+export const getDocumentDetail = async (documentId: string) => {
+  const profile = await getCurrentProfile();
+
+  const [row] = await db
+    .select({ document: documents, employeeName: employees.fullName })
+    .from(documents)
+    .innerJoin(employees, eq(documents.employeeId, employees.id))
+    .where(and(eq(documents.id, documentId), eq(documents.employerId, profile.id)))
+    .limit(1);
+
+  if (!row) return null;
+
+  const [versions, timeline, verificationCount] = await Promise.all([
+    listDocumentVersions(documentId),
+    listDocumentTimeline(documentId),
+    countDocumentVerifications(documentId),
+  ]);
+
+  return {
+    document: row.document,
+    employeeName: row.employeeName,
+    versions,
+    timeline,
+    verificationCount,
+  };
+};
+
+export type MutationResult = { success: true } | { success: false; error: string };
+
+const getOwnedDocument = async (documentId: string, employerId: string) => {
+  const [document] = await db
+    .select()
+    .from(documents)
+    .where(and(eq(documents.id, documentId), eq(documents.employerId, employerId)))
+    .limit(1);
+
+  return document;
+};
+
+/** Lets an employer reclassify a document after the fact (the initial category is only ever a default or inherited from its template). */
+export const updateDocumentCategory = async (
+  documentId: string,
+  category: DocumentCategory,
+  customCategoryLabel: string | null,
+): Promise<MutationResult> => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document) return { success: false, error: "Document not found" };
+
+  if (category === "custom" && !customCategoryLabel?.trim()) {
+    return { success: false, error: "Enter a label for the custom category" };
+  }
+
+  await db
+    .update(documents)
+    .set({ category, customCategoryLabel: category === "custom" ? customCategoryLabel : null, updatedAt: new Date() })
+    .where(eq(documents.id, documentId));
+
+  revalidatePath("/dashboard/documents");
+  revalidatePath(`/dashboard/documents/${documentId}`);
+  return { success: true };
+};
+
+export const softDeleteDocument = async (documentId: string): Promise<MutationResult> => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document) return { success: false, error: "Document not found" };
+
+  await db.update(documents).set({ deletedAt: new Date() }).where(eq(documents.id, documentId));
+  await logAuditEvent({ action: "document.deleted", actorEmail: profile.email, documentId });
+
+  revalidatePath("/dashboard/documents");
+  revalidatePath(`/dashboard/documents/${documentId}`);
+  return { success: true };
+};
+
+export const restoreDocument = async (documentId: string): Promise<MutationResult> => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document) return { success: false, error: "Document not found" };
+
+  await db.update(documents).set({ deletedAt: null }).where(eq(documents.id, documentId));
+  await logAuditEvent({ action: "document.restored", actorEmail: profile.email, documentId });
+
+  revalidatePath("/dashboard/documents");
+  revalidatePath(`/dashboard/documents/${documentId}`);
+  return { success: true };
+};
+
+/** Re-sends the invitation/reminder email to whichever party's turn it currently is, reusing the existing signing token — no new link is issued. */
+export const resendDocumentSigningEmail = async (documentId: string): Promise<MutationResult> => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document) return { success: false, error: "Document not found" };
+
+  const [employee] = await db.select().from(employees).where(eq(employees.id, document.employeeId)).limit(1);
+  const origin = await getAppOrigin();
+
+  if (document.status === "waiting" && document.signingToken && employee?.email) {
+    await sendEmail({
+      to: employee.email,
+      subject: `Reminder: ${profile.companyName} — documents to sign`,
+      html: signingInvitationEmail({
+        employeeName: employee.fullName,
+        companyName: profile.companyName,
+        documents: [{ title: document.title, signingUrl: `${origin}/sign/${document.signingToken}` }],
+      }),
+    });
+    await logAuditEvent({
+      action: "document.sent",
+      actorEmail: profile.email,
+      documentId,
+      metadata: { to: employee.email, resent: true },
+    });
+    return { success: true };
+  }
+
+  const awaitingEmployer =
+    document.status === "employee_signed" || (document.status === "draft" && document.signatureType === "employer");
+
+  if (awaitingEmployer) {
+    await sendEmail({
+      to: profile.email,
+      subject: `Reminder: ${document.title} — ready for your signature`,
+      html: employerSignatureNeededEmail({
+        documentTitle: document.title,
+        employeeName: employee?.fullName ?? "",
+        dashboardUrl: `${origin}/dashboard/documents/${document.id}`,
+      }),
+    });
+    await logAuditEvent({
+      action: "document.sent",
+      actorEmail: profile.email,
+      documentId,
+      metadata: { to: profile.email, resent: true },
+    });
+    return { success: true };
+  }
+
+  return { success: false, error: "This document has no pending signature to send a reminder for." };
 };
 
 export const listDocumentBundles = async (employeeId: string) => {
@@ -401,7 +666,47 @@ export const getDocumentDownloadUrl = async (documentId: string) => {
     return null;
   }
 
+  await logAuditEvent({ action: "document.downloaded", actorEmail: profile.email, documentId });
   return data.signedUrl;
+};
+
+/** Same signed URL as getDocumentDownloadUrl, but for inline preview — deliberately not logged as a download. */
+export const getDocumentPreviewUrl = async (documentId: string) => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document?.pdfUrl) return null;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).createSignedUrl(document.pdfUrl, 60 * 10);
+  return error ? null : data.signedUrl;
+};
+
+/** Signer/IP/browser rows for the Audit Report tab. */
+export const getDocumentSignatures = async (documentId: string) => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document) return [];
+
+  return db.select().from(signatures).where(eq(signatures.documentId, documentId)).orderBy(signatures.signedAt);
+};
+
+/** Signed URL for one specific historical version, so past versions stay downloadable even after newer ones are recorded. */
+export const getVersionDownloadUrl = async (documentId: string, versionId: string) => {
+  const profile = await getCurrentProfile();
+  const document = await getOwnedDocument(documentId, profile.id);
+  if (!document) return null;
+
+  const [version] = await db
+    .select()
+    .from(documentVersions)
+    .where(and(eq(documentVersions.id, versionId), eq(documentVersions.documentId, documentId)))
+    .limit(1);
+
+  if (!version) return null;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.storage.from(DOCUMENTS_BUCKET).createSignedUrl(version.pdfUrl, 60 * 10);
+  return error ? null : data.signedUrl;
 };
 
 export type SignAsEmployerResult = { success: true } | { success: false; error: string };
@@ -440,6 +745,10 @@ export const signAsEmployer = async (
     return { success: false, error: "Could not load the document to sign." };
   }
 
+  const headerList = await headers();
+  const ipAddress = headerList.get("x-forwarded-for");
+  const userAgent = headerList.get("user-agent");
+
   const signedPdfBytes = await applySignatureToDocument(new Uint8Array(await pdfData.arrayBuffer()), {
     role: "employer",
     layout: document.signatureLayout as SignatureBlockLayout | null,
@@ -448,7 +757,7 @@ export const signAsEmployer = async (
     signatureDataUrl,
     consentText: "Podpis reprezentanta pracodawcy/zleceniodawcy potwierdzający zawarcie i warunki niniejszego dokumentu.",
     signedAt: new Date(),
-    ipAddress: null,
+    ipAddress,
     stampUrl: profile.logoUrl,
   });
 
@@ -475,6 +784,8 @@ export const signAsEmployer = async (
     documentId: document.id,
     signerEmail: profile.email,
     imageUrl: signatureImagePath,
+    ipAddress,
+    userAgent,
   });
 
   await db
@@ -491,6 +802,14 @@ export const signAsEmployer = async (
     action: "document.completed",
     actorEmail: profile.email,
     documentId: document.id,
+  });
+
+  await recordDocumentVersion({
+    documentId: document.id,
+    pdfBytes: finalPdfBytes,
+    pdfUrl: finalPath,
+    note: "Employer signed — completed",
+    actorEmail: profile.email,
   });
 
   const [employee] = await db

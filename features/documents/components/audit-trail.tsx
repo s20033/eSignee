@@ -1,9 +1,4 @@
-const ACTION_LABELS: Record<string, string> = {
-  "document.generated": "Document generated",
-  "document.signed_by_employee": "Signed by employee",
-  "document.signed_by_employer": "Signed by employer",
-  "document.completed": "Completed",
-};
+import { ACTION_LABELS } from "@/lib/audit/action-labels";
 
 type AuditEntry = {
   id: string;

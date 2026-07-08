@@ -1,6 +1,6 @@
 "use server";
 
-import { headers } from "next/headers";
+import { getAppOrigin } from "@/lib/get-app-origin";
 import { createClient } from "@/lib/supabase/server";
 import {
   forgotPasswordSchema,
@@ -77,7 +77,7 @@ export const requestPasswordReset = async (values: unknown): Promise<PasswordRes
     return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const origin = (await headers()).get("origin") ?? process.env.NEXT_PUBLIC_SITE_URL;
+  const origin = await getAppOrigin();
   const supabase = await createClient();
 
   // Always return success regardless of whether the email exists, to avoid leaking account existence.
@@ -116,7 +116,7 @@ export const signUp = async (values: unknown): Promise<SignUpActionResult> => {
     return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const origin = (await headers()).get("origin") ?? process.env.NEXT_PUBLIC_SITE_URL;
+  const origin = await getAppOrigin();
 
   const supabase = await createClient();
   const { data, error } = await supabase.auth.signUp({

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,7 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { generateDocumentFromTemplate } from "../actions";
+import { generateDocumentsFromTemplates } from "../actions";
 
 type TemplateOption = { id: string; name: string; placeholders: string[] };
 
@@ -29,11 +30,16 @@ const SIGNATURE_OPTIONS = [
 
 export const GenerateFromTemplateForm = ({ employeeId, templates }: GenerateFromTemplateFormProps) => {
   const router = useRouter();
-  const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [signatureType, setSignatureType] = useState<(typeof SIGNATURE_OPTIONS)[number]["value"]>("employee");
   const [values, setValues] = useState<Record<string, string>>({});
   const [serverError, setServerError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const uniquePlaceholders = useMemo(() => {
+    const selected = templates.filter((template) => selectedIds.includes(template.id));
+    return Array.from(new Set(selected.flatMap((template) => template.placeholders)));
+  }, [templates, selectedIds]);
 
   if (templates.length === 0) {
     return (
@@ -43,25 +49,27 @@ export const GenerateFromTemplateForm = ({ employeeId, templates }: GenerateFrom
     );
   }
 
-  const selectedTemplate = templates.find((template) => template.id === templateId) ?? templates[0];
-
-  const onTemplateChange = (nextId: string | null) => {
-    if (!nextId) return;
-    setTemplateId(nextId);
-    setValues({});
+  const toggleTemplate = (templateId: string, checked: boolean) => {
+    setSelectedIds((current) =>
+      checked ? [...current, templateId] : current.filter((id) => id !== templateId),
+    );
   };
 
   const onSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setServerError(null);
-    setIsSubmitting(true);
 
-    const result = await generateDocumentFromTemplate(employeeId, {
-      templateId: selectedTemplate.id,
+    if (selectedIds.length === 0) {
+      setServerError("Select at least one template.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    const result = await generateDocumentsFromTemplates(employeeId, {
+      templateIds: selectedIds,
       signatureType,
       values,
     });
-
     setIsSubmitting(false);
 
     if (!result.success) {
@@ -69,6 +77,7 @@ export const GenerateFromTemplateForm = ({ employeeId, templates }: GenerateFrom
       return;
     }
 
+    setSelectedIds([]);
     setValues({});
     router.refresh();
   };
@@ -76,24 +85,23 @@ export const GenerateFromTemplateForm = ({ employeeId, templates }: GenerateFrom
   return (
     <form onSubmit={onSubmit} className="max-w-2xl space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="templateId">Template</Label>
-        <Select value={selectedTemplate.id} onValueChange={onTemplateChange}>
-          <SelectTrigger id="templateId" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {templates.map((template) => (
-              <SelectItem key={template.id} value={template.id}>
-                {template.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <Label>Templates to generate</Label>
+        <div className="space-y-2 rounded-lg border p-3">
+          {templates.map((template) => (
+            <Label key={template.id} className="flex w-fit items-center gap-2 font-normal">
+              <Checkbox
+                checked={selectedIds.includes(template.id)}
+                onCheckedChange={(checked) => toggleTemplate(template.id, checked === true)}
+              />
+              {template.name}
+            </Label>
+          ))}
+        </div>
       </div>
 
-      {selectedTemplate.placeholders.length > 0 && (
+      {uniquePlaceholders.length > 0 && (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {selectedTemplate.placeholders.map((placeholder) => (
+          {uniquePlaceholders.map((placeholder) => (
             <div key={placeholder} className="space-y-2">
               <Label htmlFor={`placeholder-${placeholder}`}>{placeholder}</Label>
               <Input
@@ -127,7 +135,9 @@ export const GenerateFromTemplateForm = ({ employeeId, templates }: GenerateFrom
       {serverError && <p className="text-sm text-destructive">{serverError}</p>}
 
       <Button type="submit" disabled={isSubmitting}>
-        {isSubmitting ? "Generating..." : "Generate & send"}
+        {isSubmitting
+          ? "Generating..."
+          : `Generate & send${selectedIds.length > 1 ? ` (${selectedIds.length} documents)` : ""}`}
       </Button>
     </form>
   );

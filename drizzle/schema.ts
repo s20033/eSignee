@@ -1,6 +1,7 @@
 import {
   boolean,
   date,
+  integer,
   jsonb,
   numeric,
   pgEnum,
@@ -95,6 +96,15 @@ export const documentStatusEnum = pgEnum("document_status", [
   "archived",
 ]);
 
+export const documentCategoryEnum = pgEnum("document_category", [
+  "hr",
+  "legal",
+  "finance",
+  "operations",
+  "sales",
+  "custom",
+]);
+
 export const templates = pgTable("templates", {
   id: uuid("id").primaryKey().defaultRandom(),
   employerId: uuid("employer_id")
@@ -103,6 +113,10 @@ export const templates = pgTable("templates", {
   name: text("name").notNull(),
   content: text("content").notNull(),
   placeholders: jsonb("placeholders").notNull().default([]),
+  // Documents generated from this template inherit this category (see
+  // features/documents/actions.ts::generateDocumentsFromTemplates).
+  category: documentCategoryEnum("category").notNull().default("hr"),
+  customCategoryLabel: text("custom_category_label"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -135,17 +149,49 @@ export const documents = pgTable("documents", {
   // Who must sign — mirrors GeneratedDocument["signature"] from lib/documents/types.
   signatureType: text("signature_type"),
   // Secure token for the no-login employee signing link. Cleared once used.
-  signingToken: text("signing_token").unique(),
+  // Not unique: every document generated in one batch that needs an employee
+  // signature shares the same token, so the employee signs the whole batch in
+  // one visit ("signing session") instead of getting one link per document.
+  signingToken: text("signing_token"),
   // Coordinates of the signature-block placeholder(s) drawn at generation time,
   // so a later signing step can place the real signature image in the right spot.
   signatureLayout: jsonb("signature_layout"),
   status: documentStatusEnum("status").notNull().default("draft"),
   pdfUrl: text("pdf_url"),
   finalPdfUrl: text("final_pdf_url"),
+  // Document Management module — see lib/documents/document-service.ts
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  category: documentCategoryEnum("category").notNull().default("hr"),
+  // Only meaningful when category = "custom".
+  customCategoryLabel: text("custom_category_label"),
+  // SHA-256 of the current (latest version's) PDF bytes — shown on the Audit
+  // Report and the public verification page.
+  sha256Hash: text("sha256_hash"),
+  // Starts at 0 — recordDocumentVersion (lib/documents/document-service.ts) always increments by
+  // one, so the first recorded version becomes 1.
+  currentVersion: integer("current_version").notNull().default(0),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+// Immutable snapshot of a document's PDF at one point in its lifecycle
+// (generated / employee signed / employer signed / completed). Never
+// overwritten — new events append a new row and bump documents.currentVersion.
+export const documentVersions = pgTable("document_versions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  documentId: uuid("document_id")
+    .notNull()
+    .references(() => documents.id, { onDelete: "cascade" }),
+  versionNumber: integer("version_number").notNull(),
+  pdfUrl: text("pdf_url").notNull(),
+  sha256Hash: text("sha256_hash").notNull(),
+  note: text("note"),
+  actorEmail: text("actor_email"),
+  createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
 });
@@ -158,6 +204,7 @@ export const signatures = pgTable("signatures", {
   signerEmail: text("signer_email").notNull(),
   imageUrl: text("image_url").notNull(),
   ipAddress: text("ip_address"),
+  userAgent: text("user_agent"),
   signedAt: timestamp("signed_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

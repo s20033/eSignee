@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { DASHBOARD_NAV_ITEMS } from "@/features/dashboard/nav-items";
+import { DASHBOARD_NAV_ITEMS, isNavItemActive } from "@/features/dashboard/nav-items";
 
 export const DashboardMobileNav = () => {
   const pathname = usePathname();
@@ -24,8 +24,7 @@ export const DashboardMobileNav = () => {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-44">
         {DASHBOARD_NAV_ITEMS.map((item) => {
-          const isActive =
-            item.href === "/dashboard" ? pathname === item.href : pathname.startsWith(item.href);
+          const isActive = isNavItemActive(pathname, item.href);
           const Icon = item.icon;
 
           return (

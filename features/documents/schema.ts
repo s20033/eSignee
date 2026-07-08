@@ -24,10 +24,12 @@ export const contractBuilderSchema = z.object({
 
 export type ContractBuilderValues = z.infer<typeof contractBuilderSchema>;
 
-export const generateFromTemplateSchema = z.object({
-  templateId: z.string().uuid(),
+export const generateFromTemplatesSchema = z.object({
+  templateIds: z.array(z.string().uuid()).min(1, "Select at least one template"),
   signatureType: z.enum(["employee", "employer", "two-party"]),
+  // Keyed by placeholder name, shared across every selected template — a
+  // placeholder with the same name in two templates is filled once.
   values: z.record(z.string(), z.string().trim().max(2000)),
 });
 
-export type GenerateFromTemplateValues = z.infer<typeof generateFromTemplateSchema>;
+export type GenerateFromTemplatesValues = z.infer<typeof generateFromTemplatesSchema>;
