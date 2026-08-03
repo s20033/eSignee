@@ -32,7 +32,7 @@ const DocumentsPage = async ({ searchParams }: DocumentsPageProps) => {
         <QuerySearch placeholder="Search by title or employee" />
         <DocumentFilters />
       </div>
-      <DocumentTable documents={documents} />
+      <DocumentTable key={`${page}-${search}-${params.status ?? ""}-${params.category ?? ""}`} documents={documents} />
       <QueryPagination page={page} totalPages={totalPages} />
     </div>
   );
