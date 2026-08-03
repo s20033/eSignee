@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { and, asc, count, eq, ilike, isNull } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { templates } from "@/drizzle/schema";
-import { getCurrentProfile } from "@/lib/auth/get-current-profile";
+import { requireTenantAdmin } from "@/lib/auth/get-current-profile";
 import { logAuditEvent } from "@/lib/audit/log";
 import type { DocumentCategory } from "@/lib/documents/category-labels";
 import { extractPlaceholders, templateFormSchema } from "./schema";
@@ -14,7 +14,7 @@ const PAGE_SIZE = 10;
 export type TemplateActionResult = { success: true } | { success: false; error: string };
 
 export const listTemplates = async (search: string, page: number, category?: DocumentCategory) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const whereClause = and(
     eq(templates.employerId, profile.id),
@@ -39,7 +39,7 @@ export const listTemplates = async (search: string, page: number, category?: Doc
 
 /** Full unpaginated list for pickers (e.g. "generate from template") — employers have few templates. */
 export const listTemplatesForPicker = async () => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const rows = await db
     .select({
@@ -60,7 +60,7 @@ export const listTemplatesForPicker = async () => {
 };
 
 export const getTemplateById = async (id: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const [template] = await db
     .select()
@@ -74,7 +74,7 @@ export const getTemplateById = async (id: string) => {
 };
 
 export const createTemplate = async (values: unknown): Promise<TemplateActionResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const parsed = templateFormSchema.safeParse(values);
 
   if (!parsed.success) {
@@ -85,6 +85,7 @@ export const createTemplate = async (values: unknown): Promise<TemplateActionRes
     .insert(templates)
     .values({
       employerId: profile.id,
+      tenantId: profile.tenantId,
       name: parsed.data.name,
       content: parsed.data.content,
       placeholders: extractPlaceholders(parsed.data.content),
@@ -96,6 +97,7 @@ export const createTemplate = async (values: unknown): Promise<TemplateActionRes
   await logAuditEvent({
     action: "template.created",
     actorEmail: profile.email,
+    tenantId: profile.tenantId,
     metadata: { templateId: created.id, name: parsed.data.name },
   });
 
@@ -107,7 +109,7 @@ export const updateTemplate = async (
   id: string,
   values: unknown,
 ): Promise<TemplateActionResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const parsed = templateFormSchema.safeParse(values);
 
   if (!parsed.success) {
@@ -126,21 +128,31 @@ export const updateTemplate = async (
     })
     .where(and(eq(templates.id, id), eq(templates.employerId, profile.id)));
 
-  await logAuditEvent({ action: "template.updated", actorEmail: profile.email, metadata: { templateId: id } });
+  await logAuditEvent({
+    action: "template.updated",
+    actorEmail: profile.email,
+    tenantId: profile.tenantId,
+    metadata: { templateId: id },
+  });
 
   revalidatePath("/dashboard/templates");
   return { success: true };
 };
 
 export const deleteTemplate = async (id: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   await db
     .update(templates)
     .set({ deletedAt: new Date() })
     .where(and(eq(templates.id, id), eq(templates.employerId, profile.id)));
 
-  await logAuditEvent({ action: "template.deleted", actorEmail: profile.email, metadata: { templateId: id } });
+  await logAuditEvent({
+    action: "template.deleted",
+    actorEmail: profile.email,
+    tenantId: profile.tenantId,
+    metadata: { templateId: id },
+  });
 
   revalidatePath("/dashboard/templates");
 };

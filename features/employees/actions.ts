@@ -1,50 +1,33 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { and, asc, count, eq, ilike, isNull, or } from "drizzle-orm";
+import { and, asc, count, eq, ilike, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { employees } from "@/drizzle/schema";
-import { getCurrentProfile } from "@/lib/auth/get-current-profile";
+import { employees, profiles } from "@/drizzle/schema";
+import { requireTenantAdmin } from "@/lib/auth/get-current-profile";
 import { logAuditEvent } from "@/lib/audit/log";
-import { employeeFormSchema, type EmployeeFormValues } from "./schema";
+import { employeeFormSchema, toEmployeeInsertValues } from "./schema";
 
 const PAGE_SIZE = 10;
 
 export type EmployeeActionResult = { success: true } | { success: false; error: string };
 
-const toEmployeeValues = (data: EmployeeFormValues, employerId: string) => ({
-  employerId,
-  fullName: data.fullName,
-  email: data.email,
-  position: data.position || null,
-  salary: data.salary || null,
-  startDate: data.startDate || null,
-  endDate: data.endDate || null,
-  passportNumber: data.passportNumber || null,
-  pesel: data.pesel || null,
-  nationality: data.nationality || null,
-  address: data.address || null,
-  bankName: data.bankName || null,
-  iban: data.iban || null,
-  jobDescription: data.jobDescription || null,
-  hourlyRate: data.hourlyRate || null,
-  minHoursPerWeek: data.minHoursPerWeek || null,
-  accommodationCost: data.accommodationCost || null,
-  isForeigner: data.isForeigner,
-  citizenship: data.isForeigner ? data.citizenship || null : null,
-  foreignerDocumentType: data.isForeigner ? data.foreignerDocumentType || null : null,
-  foreignerDocumentNumber: data.isForeigner ? data.foreignerDocumentNumber || null : null,
-  foreignerDocumentExpiry: data.isForeigner ? data.foreignerDocumentExpiry || null : null,
-  workBasis: data.isForeigner ? data.workBasis || null : null,
-  isStudent: data.isStudent,
-});
+// Self-registered employees (features/auth/actions.ts::registerEmployee) get
+// their `employees` row created immediately, before a tenant_admin has
+// approved the account — so the regular employee list must hide it until
+// that linked profile is out of the `pending` state, or admins would see
+// unapproved, unverified data as if it were a real employee.
+const notPendingSelfRegistration = sql`not exists (
+  select 1 from ${profiles} p where p.id = ${employees.userId} and p.status = 'pending'
+)`;
 
 export const listEmployees = async (search: string, page: number) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const whereClause = and(
-    eq(employees.employerId, profile.id),
+    eq(employees.tenantId, profile.tenantId),
     isNull(employees.deletedAt),
+    notPendingSelfRegistration,
     search
       ? or(ilike(employees.fullName, `%${search}%`), ilike(employees.email, `%${search}%`))
       : undefined,
@@ -65,7 +48,7 @@ export const listEmployees = async (search: string, page: number) => {
 };
 
 export const getEmployeeById = async (id: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const [employee] = await db
     .select()
@@ -73,7 +56,7 @@ export const getEmployeeById = async (id: string) => {
     .where(
       and(
         eq(employees.id, id),
-        eq(employees.employerId, profile.id),
+        eq(employees.tenantId, profile.tenantId),
         isNull(employees.deletedAt),
       ),
     )
@@ -83,7 +66,7 @@ export const getEmployeeById = async (id: string) => {
 };
 
 export const createEmployee = async (values: unknown): Promise<EmployeeActionResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const parsed = employeeFormSchema.safeParse(values);
 
   if (!parsed.success) {
@@ -92,12 +75,13 @@ export const createEmployee = async (values: unknown): Promise<EmployeeActionRes
 
   const [created] = await db
     .insert(employees)
-    .values(toEmployeeValues(parsed.data, profile.id))
+    .values(toEmployeeInsertValues(parsed.data, profile.id, profile.tenantId))
     .returning({ id: employees.id });
 
   await logAuditEvent({
     action: "employee.created",
     actorEmail: profile.email,
+    tenantId: profile.tenantId,
     metadata: { employeeId: created.id, fullName: parsed.data.fullName },
   });
 
@@ -109,7 +93,7 @@ export const updateEmployee = async (
   id: string,
   values: unknown,
 ): Promise<EmployeeActionResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const parsed = employeeFormSchema.safeParse(values);
 
   if (!parsed.success) {
@@ -118,12 +102,13 @@ export const updateEmployee = async (
 
   await db
     .update(employees)
-    .set({ ...toEmployeeValues(parsed.data, profile.id), updatedAt: new Date() })
-    .where(and(eq(employees.id, id), eq(employees.employerId, profile.id)));
+    .set({ ...toEmployeeInsertValues(parsed.data, profile.id, profile.tenantId), updatedAt: new Date() })
+    .where(and(eq(employees.id, id), eq(employees.tenantId, profile.tenantId)));
 
   await logAuditEvent({
     action: "employee.updated",
     actorEmail: profile.email,
+    tenantId: profile.tenantId,
     metadata: { employeeId: id },
   });
 
@@ -132,16 +117,17 @@ export const updateEmployee = async (
 };
 
 export const deleteEmployee = async (id: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   await db
     .update(employees)
     .set({ deletedAt: new Date() })
-    .where(and(eq(employees.id, id), eq(employees.employerId, profile.id)));
+    .where(and(eq(employees.id, id), eq(employees.tenantId, profile.tenantId)));
 
   await logAuditEvent({
     action: "employee.deleted",
     actorEmail: profile.email,
+    tenantId: profile.tenantId,
     metadata: { employeeId: id },
   });
 

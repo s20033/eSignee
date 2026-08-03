@@ -5,8 +5,9 @@ import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
 import { and, count, desc, eq, ilike, inArray, isNull, or } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { auditLogs, documents, documentVersions, employees, signatures } from "@/drizzle/schema";
-import { getCurrentProfile } from "@/lib/auth/get-current-profile";
+import { auditLogs, documents, documentVersions, employees, signatures, tenantDocumentSettings } from "@/drizzle/schema";
+import { requireTenantAdmin } from "@/lib/auth/get-current-profile";
+import { getCurrentTenant } from "@/lib/auth/get-current-tenant";
 import { createClient } from "@/lib/supabase/server";
 import { generateDocumentBundle } from "@/lib/documents/generate-bundle";
 import { renderDocumentToPdf } from "@/lib/pdf/render";
@@ -20,7 +21,7 @@ import { sendEmail } from "@/lib/email/send";
 import { documentCompletedEmail, employerSignatureNeededEmail, signingInvitationEmail } from "@/lib/email/templates";
 import { logAuditEvent, listDocumentTimeline, countDocumentVerifications } from "@/lib/audit/log";
 import { recordDocumentVersion, listDocumentVersions } from "@/lib/documents/document-service";
-import type { BundleInput, SignatureType } from "@/lib/documents/types";
+import type { BundleInput, EmployerData, SignatureType } from "@/lib/documents/types";
 import type { DocumentCategory } from "@/lib/documents/category-labels";
 import type { Document } from "@/types/document";
 import { templates } from "@/drizzle/schema";
@@ -31,10 +32,21 @@ import { contractBuilderSchema, type ContractBuilderValues, generateFromTemplate
 const DOCUMENTS_BUCKET = "documents";
 const SIGNATURES_BUCKET = "signatures";
 
+const getSignatoryFields = async (tenantId: string) => {
+  const [settings] = await db
+    .select({ signatoryName: tenantDocumentSettings.signatoryName, signatoryTitle: tenantDocumentSettings.signatoryTitle })
+    .from(tenantDocumentSettings)
+    .where(eq(tenantDocumentSettings.tenantId, tenantId))
+    .limit(1);
+
+  return { signatoryName: settings?.signatoryName ?? null, signatoryTitle: settings?.signatoryTitle ?? null };
+};
+
 export type GenerateBundleResult = { success: true; bundleId: string } | { success: false; error: string };
 
 type PersistDocumentInput = {
   profileId: string;
+  tenantId: string;
   actorEmail: string;
   employeeId: string;
   bundleId: string;
@@ -88,6 +100,7 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
     .values({
       id: input.documentId,
       employerId: input.profileId,
+      tenantId: input.tenantId,
       employeeId: input.employeeId,
       templateId: input.templateId,
       title: input.title,
@@ -107,6 +120,7 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
   await logAuditEvent({
     action: "document.generated",
     actorEmail: input.actorEmail,
+    tenantId: input.tenantId,
     documentId: createdDocument.id,
     metadata: { kind: input.kind, bundleId: input.bundleId },
   });
@@ -128,7 +142,7 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
 
 const toBundleInput = (
   employee: typeof employees.$inferSelect,
-  employer: { name: string; address: string | null; taxId: string | null; regon: string | null; krs: string | null },
+  employer: EmployerData,
   values: ContractBuilderValues,
 ): BundleInput => {
   const [firstName, ...rest] = employee.fullName.split(" ");
@@ -185,22 +199,28 @@ export const generateContractBundle = async (
   employeeId: string,
   values: unknown,
 ): Promise<GenerateBundleResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const parsed = contractBuilderSchema.safeParse(values);
 
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const [employee] = await db
-    .select()
-    .from(employees)
-    .where(and(eq(employees.id, employeeId), eq(employees.employerId, profile.id)))
-    .limit(1);
+  const [employee, tenant] = await Promise.all([
+    db
+      .select()
+      .from(employees)
+      .where(and(eq(employees.id, employeeId), eq(employees.employerId, profile.id)))
+      .limit(1)
+      .then(([row]) => row),
+    getCurrentTenant(),
+  ]);
 
   if (!employee) {
     return { success: false, error: "Employee not found" };
   }
+
+  const signatory = await getSignatoryFields(tenant.id);
 
   const bundleInput = toBundleInput(
     employee,
@@ -210,6 +230,8 @@ export const generateContractBundle = async (
       taxId: profile.taxId,
       regon: profile.regon,
       krs: profile.krs,
+      signingPlace: tenant.defaultSigningPlace,
+      ...signatory,
     },
     parsed.data,
   );
@@ -231,6 +253,7 @@ export const generateContractBundle = async (
 
     const result = await persistGeneratedDocument({
       profileId: profile.id,
+      tenantId: tenant.id,
       actorEmail: profile.email,
       employeeId,
       bundleId,
@@ -283,22 +306,28 @@ export const generateDocumentsFromTemplates = async (
   employeeId: string,
   values: unknown,
 ): Promise<GenerateBundleResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const parsed = generateFromTemplatesSchema.safeParse(values);
 
   if (!parsed.success) {
     return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
   }
 
-  const [employee] = await db
-    .select()
-    .from(employees)
-    .where(and(eq(employees.id, employeeId), eq(employees.employerId, profile.id)))
-    .limit(1);
+  const [employee, tenant] = await Promise.all([
+    db
+      .select()
+      .from(employees)
+      .where(and(eq(employees.id, employeeId), eq(employees.employerId, profile.id)))
+      .limit(1)
+      .then(([row]) => row),
+    getCurrentTenant(),
+  ]);
 
   if (!employee) {
     return { success: false, error: "Employee not found" };
   }
+
+  const signatory = await getSignatoryFields(tenant.id);
 
   const selectedTemplates = await db
     .select()
@@ -339,6 +368,8 @@ export const generateDocumentsFromTemplates = async (
         taxId: profile.taxId,
         regon: profile.regon,
         krs: profile.krs,
+        signingPlace: tenant.defaultSigningPlace,
+        ...signatory,
       },
       {
         employeeName: employee.fullName,
@@ -349,6 +380,7 @@ export const generateDocumentsFromTemplates = async (
 
     const result = await persistGeneratedDocument({
       profileId: profile.id,
+      tenantId: tenant.id,
       actorEmail: profile.email,
       employeeId,
       bundleId,
@@ -422,7 +454,7 @@ export const listDocuments = async (
   page: number,
   filters: ListDocumentsFilters = {},
 ) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const whereClause = and(
     eq(documents.employerId, profile.id),
@@ -465,7 +497,7 @@ export const listDocuments = async (
 
 /** Full detail for one document: metadata, version history, timeline, and verification count. */
 export const getDocumentDetail = async (documentId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const [row] = await db
     .select({ document: documents, employeeName: employees.fullName })
@@ -509,7 +541,7 @@ export const updateDocumentCategory = async (
   category: DocumentCategory,
   customCategoryLabel: string | null,
 ): Promise<MutationResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return { success: false, error: "Document not found" };
 
@@ -528,7 +560,7 @@ export const updateDocumentCategory = async (
 };
 
 export const softDeleteDocument = async (documentId: string): Promise<MutationResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return { success: false, error: "Document not found" };
 
@@ -540,8 +572,36 @@ export const softDeleteDocument = async (documentId: string): Promise<MutationRe
   return { success: true };
 };
 
+/** Bulk version of softDeleteDocument, for the Documents list's multi-select toolbar. Re-derives ownership from the DB rather than trusting the client-supplied id list. */
+export const bulkSoftDeleteDocuments = async (documentIds: string[]): Promise<MutationResult> => {
+  const profile = await requireTenantAdmin();
+  if (documentIds.length === 0) return { success: true };
+
+  const owned = await db
+    .select({ id: documents.id })
+    .from(documents)
+    .where(
+      and(
+        inArray(documents.id, documentIds),
+        eq(documents.employerId, profile.id),
+        isNull(documents.deletedAt),
+      ),
+    );
+
+  if (owned.length === 0) return { success: false, error: "No matching documents found" };
+
+  const ownedIds = owned.map((row) => row.id);
+  await db.update(documents).set({ deletedAt: new Date() }).where(inArray(documents.id, ownedIds));
+  await Promise.all(
+    ownedIds.map((documentId) => logAuditEvent({ action: "document.deleted", actorEmail: profile.email, documentId })),
+  );
+
+  revalidatePath("/dashboard/documents");
+  return { success: true };
+};
+
 export const restoreDocument = async (documentId: string): Promise<MutationResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return { success: false, error: "Document not found" };
 
@@ -555,7 +615,7 @@ export const restoreDocument = async (documentId: string): Promise<MutationResul
 
 /** Re-sends the invitation/reminder email to whichever party's turn it currently is, reusing the existing signing token — no new link is issued. */
 export const resendDocumentSigningEmail = async (documentId: string): Promise<MutationResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return { success: false, error: "Document not found" };
 
@@ -607,7 +667,7 @@ export const resendDocumentSigningEmail = async (documentId: string): Promise<Mu
 };
 
 export const listDocumentBundles = async (employeeId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const rows = await db
     .select()
@@ -627,7 +687,7 @@ export const listDocumentBundles = async (employeeId: string) => {
 };
 
 export const listDocumentAuditLog = async (employeeId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   return db
     .select({
@@ -645,7 +705,7 @@ export const listDocumentAuditLog = async (employeeId: string) => {
 };
 
 export const getDocumentDownloadUrl = async (documentId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const [document] = await db
     .select()
@@ -672,7 +732,7 @@ export const getDocumentDownloadUrl = async (documentId: string) => {
 
 /** Same signed URL as getDocumentDownloadUrl, but for inline preview — deliberately not logged as a download. */
 export const getDocumentPreviewUrl = async (documentId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document?.pdfUrl) return null;
 
@@ -683,7 +743,7 @@ export const getDocumentPreviewUrl = async (documentId: string) => {
 
 /** Signer/IP/browser rows for the Audit Report tab. */
 export const getDocumentSignatures = async (documentId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return [];
 
@@ -692,7 +752,7 @@ export const getDocumentSignatures = async (documentId: string) => {
 
 /** Signed URL for one specific historical version, so past versions stay downloadable even after newer ones are recorded. */
 export const getVersionDownloadUrl = async (documentId: string, versionId: string) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return null;
 
@@ -716,7 +776,7 @@ export const signAsEmployer = async (
   documentId: string,
   signatureDataUrl: string,
 ): Promise<SignAsEmployerResult> => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const [document] = await db
     .select()
@@ -763,7 +823,12 @@ export const signAsEmployer = async (
     stampUrl: profile.logoUrl,
   });
 
-  const finalPath = `${document.employerId}/${document.employeeId}/${document.bundleId}/${document.kind}-final.pdf`;
+  // document.kind is null for every template-generated document — falling back to
+  // document.id keeps each document's final PDF at its own storage key instead of
+  // multiple documents in the same bundle colliding on "null-final.pdf" and
+  // overwriting each other's signed contract (see signing-actions.ts's employee-side
+  // upload path, which uses the same fallback for the same reason).
+  const finalPath = `${document.employerId}/${document.employeeId}/${document.bundleId}/${document.kind ?? document.id}-final.pdf`;
   const finalPdfBytes = await embedVerificationQr(
     signedPdfBytes,
     `${await getAppOrigin()}/verify/${document.id}`,

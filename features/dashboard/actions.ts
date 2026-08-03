@@ -3,12 +3,12 @@
 import { and, asc, count, desc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
 import { auditLogs, documents, employees, templates } from "@/drizzle/schema";
-import { getCurrentProfile } from "@/lib/auth/get-current-profile";
+import { requireTenantAdmin } from "@/lib/auth/get-current-profile";
 
 const DOCUMENT_STATUSES = ["draft", "waiting", "employee_signed", "completed", "archived"] as const;
 
 export const getDashboardStats = async () => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const [[employeeCount], [templateCount], statusCounts, recentActivity] = await Promise.all([
     db
@@ -57,7 +57,7 @@ export const getDashboardStats = async () => {
 
 /** Contracts with a known end date, soonest first — powers the dashboard's expiration tracker. */
 export const getUpcomingContractExpirations = async () => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const rows = await db
     .select({
@@ -86,7 +86,7 @@ export const getUpcomingContractExpirations = async () => {
 
 /** Documents generated per month, zero-filled, oldest first — powers the dashboard's monthly trend chart. */
 export const getMonthlyDocumentCounts = async (monthsBack = 6) => {
-  const profile = await getCurrentProfile();
+  const profile = await requireTenantAdmin();
 
   const rows = await db
     .select({
