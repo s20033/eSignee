@@ -12,6 +12,62 @@ config({ path: ".env.local" });
 
 const BUCKETS = ["documents", "signatures", "logos", "audit"] as const;
 
+// Path convention: {tenantId}/{employeeId}/{filename}. Unlike the owner-only
+// buckets above, this one has two legitimate readers per file — the
+// uploading employee, and any tenant_admin in the same tenant — so it can't
+// use the simple "auth.uid() = first path segment" pattern. The subqueries
+// below rely on employees/profiles' own RLS policies (Phase 1) to already
+// scope what each caller can see, so no extra SECURITY DEFINER helper is
+// needed. No update/delete policy: a correction is a new upload, not an
+// edit, so the review trail (including past rejections) stays intact.
+const setupIdentityDocumentsBucket = async (sql: postgres.Sql) => {
+  const bucket = "identity-documents";
+
+  await sql`
+    insert into storage.buckets (id, name, public)
+    values (${bucket}, ${bucket}, false)
+    on conflict (id) do nothing
+  `;
+
+  await sql.unsafe(`drop policy if exists "identity_documents_insert_own" on storage.objects`);
+  await sql.unsafe(`
+    create policy "identity_documents_insert_own" on storage.objects for insert
+    with check (
+      bucket_id = '${bucket}'
+      and exists (
+        select 1 from employees e
+        where e.id::text = (storage.foldername(name))[2]
+          and e.tenant_id::text = (storage.foldername(name))[1]
+          and e.user_id = auth.uid()
+      )
+    )
+  `);
+
+  await sql.unsafe(`drop policy if exists "identity_documents_select_own_or_admin" on storage.objects`);
+  await sql.unsafe(`
+    create policy "identity_documents_select_own_or_admin" on storage.objects for select
+    using (
+      bucket_id = '${bucket}'
+      and (
+        exists (
+          select 1 from employees e
+          where e.id::text = (storage.foldername(name))[2]
+            and e.tenant_id::text = (storage.foldername(name))[1]
+            and e.user_id = auth.uid()
+        )
+        or exists (
+          select 1 from profiles p
+          where p.id = auth.uid()
+            and p.tenant_id::text = (storage.foldername(name))[1]
+            and p.role = 'tenant_admin'
+        )
+      )
+    )
+  `);
+
+  console.log(`Configured bucket "${bucket}" (private, tenant/employee-scoped).`);
+};
+
 const main = async () => {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
@@ -52,6 +108,8 @@ const main = async () => {
 
       console.log(`Configured bucket "${bucket}" (private, owner-scoped by first path segment).`);
     }
+
+    await setupIdentityDocumentsBucket(sql);
   } finally {
     await sql.end();
   }

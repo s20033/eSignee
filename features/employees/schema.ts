@@ -95,3 +95,58 @@ export const employeeFormSchema = z
   });
 
 export type EmployeeFormValues = z.infer<typeof employeeFormSchema>;
+
+export const emptyEmployeeFormValues: EmployeeFormValues = {
+  fullName: "",
+  email: "",
+  position: "",
+  salary: "",
+  startDate: "",
+  endDate: "",
+  passportNumber: "",
+  pesel: "",
+  nationality: "",
+  address: "",
+  bankName: "",
+  iban: "",
+  jobDescription: "",
+  hourlyRate: "",
+  minHoursPerWeek: "",
+  accommodationCost: "",
+  isForeigner: false,
+  citizenship: "",
+  foreignerDocumentType: undefined,
+  foreignerDocumentNumber: "",
+  foreignerDocumentExpiry: "",
+  workBasis: "",
+  isStudent: false,
+};
+
+/** Shared by createEmployee/updateEmployee (employer-initiated) and registerEmployee (self-registration) — maps the form's string fields onto the employees table's typed columns. */
+export const toEmployeeInsertValues = (data: EmployeeFormValues, employerId: string, tenantId: string) => ({
+  employerId,
+  tenantId,
+  fullName: data.fullName,
+  email: data.email,
+  position: data.position || null,
+  salary: data.salary || null,
+  startDate: data.startDate || null,
+  endDate: data.endDate || null,
+  passportNumber: data.passportNumber || null,
+  pesel: data.pesel || null,
+  nationality: data.nationality || null,
+  address: data.address || null,
+  bankName: data.bankName || null,
+  iban: data.iban || null,
+  jobDescription: data.jobDescription || null,
+  hourlyRate: data.hourlyRate || null,
+  minHoursPerWeek: data.minHoursPerWeek || null,
+  accommodationCost: data.accommodationCost || null,
+  isForeigner: data.isForeigner,
+  citizenship: data.isForeigner ? data.citizenship || null : null,
+  foreignerDocumentType: data.isForeigner ? data.foreignerDocumentType || null : null,
+  foreignerDocumentNumber: data.isForeigner ? data.foreignerDocumentNumber || null : null,
+  foreignerDocumentExpiry: data.isForeigner ? data.foreignerDocumentExpiry || null : null,
+  workBasis: data.isForeigner ? data.workBasis || null : null,
+  isStudent: data.isStudent,
+});

@@ -1,5 +1,5 @@
 import { LEGAL_2026 } from "@/lib/legal/constants";
-import { DASH, employerBlock, fullName } from "../helpers";
+import { DASH, employerBlock, fullName, representedByClause } from "../helpers";
 import type { BundleInput, GeneratedDocument } from "../types";
 
 export const generateUmowaZlecenie = ({
@@ -22,8 +22,8 @@ export const generateUmowaZlecenie = ({
     sections: [
       {
         paragraphs: [
-          `Umowa zlecenia zawarta w dniu ${contract.startDate || DASH} w Lublinie (dalej: „Umowa”), pomiędzy:`,
-          `${employerBlock(employer)}, reprezentowaną przez osobę upoważnioną do składania oświadczeń w jej imieniu, zwaną dalej „Zleceniodawcą”,`,
+          `Umowa zlecenia zawarta w dniu ${contract.startDate || DASH} w miejscowości ${employer.signingPlace} (dalej: „Umowa”), pomiędzy:`,
+          `${employerBlock(employer)}, ${representedByClause(employer)}, zwaną dalej „Zleceniodawcą”,`,
           "a",
           `${fullName(employee)}, PESEL: ${employee.pesel || DASH}, legitymującym/ą się dokumentem tożsamości nr ${employee.passportNumber || DASH}, zamieszkałym/ą przy ${employee.address || DASH}, zwanym/ą dalej „Zleceniobiorcą”,`,
           `łącznie zwanymi dalej „Stronami”, a każda z osobna „Stroną”.`,

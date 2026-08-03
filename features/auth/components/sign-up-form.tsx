@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TENANT_PLANS, TENANT_PLAN_LABELS } from "@/lib/billing/plans";
 import { signUp } from "../actions";
 import { signUpSchema, type SignUpFormValues } from "../schema";
 
@@ -16,11 +18,12 @@ export const SignUpForm = () => {
   const [confirmationSent, setConfirmationSent] = useState(false);
   const {
     register,
+    control,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<SignUpFormValues>({
     resolver: zodResolver(signUpSchema),
-    defaultValues: { companyName: "", email: "", password: "", confirmPassword: "" },
+    defaultValues: { companyName: "", email: "", password: "", confirmPassword: "", plan: "free" },
   });
 
   const onSubmit = handleSubmit(async (values) => {
@@ -79,6 +82,28 @@ export const SignUpForm = () => {
         {errors.confirmPassword && (
           <p className="text-sm text-destructive">{errors.confirmPassword.message}</p>
         )}
+      </div>
+
+      <div className="space-y-2">
+        <Label htmlFor="plan">Plan</Label>
+        <Controller
+          name="plan"
+          control={control}
+          render={({ field }) => (
+            <Select value={field.value} onValueChange={(value) => value && field.onChange(value)}>
+              <SelectTrigger id="plan" className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TENANT_PLANS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {TENANT_PLAN_LABELS[value]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
       </div>
 
       {serverError && <p className="text-sm text-destructive">{serverError}</p>}

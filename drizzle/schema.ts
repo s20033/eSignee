@@ -9,6 +9,7 @@ import {
   pgTable,
   text,
   timestamp,
+  unique,
   uuid,
 } from "drizzle-orm/pg-core";
 
@@ -18,14 +19,90 @@ export const authUsers = authSchema.table("users", {
   id: uuid("id").primaryKey(),
 });
 
+export const userRoleEnum = pgEnum("user_role", ["super_admin", "tenant_admin", "employee"]);
+
+export const accountStatusEnum = pgEnum("account_status", [
+  "pending",
+  "active",
+  "rejected",
+  "disabled",
+]);
+
+export const tenantStatusEnum = pgEnum("tenant_status", ["active", "suspended"]);
+
+// One row per employer company. Introduced in the multi-tenant migration —
+// every existing profile got a tenant row with the same id (see the
+// 00xx_backfill_tenants migration), so tenants.id == the founding admin's
+// profiles.id for pre-existing accounts. New signups create both together.
+export const tenants = pgTable("tenants", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name").notNull(),
+  address: text("address"),
+  logoUrl: text("logo_url"),
+  // Place of signing shown in generated contracts and on the PDF signature
+  // block (was hardcoded to "Lublin" pre-migration).
+  defaultSigningPlace: text("default_signing_place").notNull().default("Lublin"),
+  defaultLocale: text("default_locale").notNull().default("pl"),
+  // Shared via /join/{code} so a new hire can self-register without a raw
+  // tenant id in the URL, and without a "search for your employer" flow that
+  // would leak which companies use the product. Regeneratable from Settings.
+  employeeInviteCode: text("employee_invite_code").notNull().unique(),
+  // Reserved for Phase 5 billing; unused until then.
+  plan: text("plan").notNull().default("free"),
+  status: tenantStatusEnum("status").notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
+
+// Tenant-editable document generation settings. Kept minimal for now
+// (Phase 3 extends this with clause/letterhead editing); split from
+// `tenants` so per-document-generation config doesn't crowd the core
+// tenant row.
+export const tenantDocumentSettings = pgTable("tenant_document_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .unique()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  signatoryName: text("signatory_name"),
+  signatoryTitle: text("signatory_title"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
 export const profiles = pgTable("profiles", {
   id: uuid("id")
     .primaryKey()
     .references(() => authUsers.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  role: userRoleEnum("role").notNull().default("tenant_admin"),
+  status: accountStatusEnum("status").notNull().default("active"),
   email: text("email").notNull(),
+  // Person's own name — collected at self-registration for employee
+  // profiles (used to seed their `employees` row on approval). Nullable:
+  // the tenant_admin signup flow doesn't collect this today.
+  fullName: text("full_name"),
+  // Only meaningful for tenant_admin profiles (shown on PDF letterheads,
+  // settings, dashboard header). Employee profiles get this set to their
+  // tenant's name at registration, purely as a harmless fallback — nothing
+  // employee-facing reads it; their identity lives on the linked employees
+  // row instead. Kept NOT NULL so the many existing tenant_admin call sites
+  // don't need a null check for a case that can't happen for them.
   companyName: text("company_name").notNull(),
 
-  // Company branding — used on generated PDF letterheads
+  // Company branding — used on generated PDF letterheads. Only meaningful
+  // for tenant_admin profiles.
   address: text("address"),
   taxId: text("tax_id"),
   regon: text("regon"),
@@ -33,6 +110,9 @@ export const profiles = pgTable("profiles", {
   logoUrl: text("logo_url"),
 
   notifyOnSignatureNeeded: boolean("notify_on_signature_needed").notNull().default(true),
+  // Set when a tenant_admin rejects a self-registered employee account —
+  // shown to the employee in the rejection email.
+  rejectionReason: text("rejection_reason"),
 
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
@@ -47,6 +127,17 @@ export const employees = pgTable("employees", {
   employerId: uuid("employer_id")
     .notNull()
     .references(() => profiles.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  // Set once this employee has (or gets) portal login access — via
+  // self-registration approval or a future employer-initiated invite.
+  // Nullable: most existing employee records predate logins and stay
+  // record-only. onDelete "set null" (not cascade) so deleting the login
+  // account never deletes the HR record itself.
+  userId: uuid("user_id")
+    .unique()
+    .references(() => profiles.id, { onDelete: "set null" }),
   fullName: text("full_name").notNull(),
   email: text("email").notNull(),
   position: text("position"),
@@ -88,6 +179,74 @@ export const employees = pgTable("employees", {
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
 
+export const identityDocumentTypeEnum = pgEnum("identity_document_type", [
+  "passport",
+  "national_id",
+  "work_permit",
+  "visa",
+  "residence_card",
+  "other",
+]);
+
+export const identityDocumentVerificationStatusEnum = pgEnum("identity_document_verification_status", [
+  "pending_review",
+  "verified",
+  "rejected",
+]);
+
+// Employee-uploaded ID/passport/work-permit/visa records — separate from
+// employees' own foreignerDocument* columns (which are employer-entered at
+// hiring time). This table is employee-self-service, reviewable by the
+// tenant admin, and expiry-tracked (powers Phase 4).
+export const identityDocuments = pgTable("identity_documents", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  employeeId: uuid("employee_id")
+    .notNull()
+    .references(() => employees.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  type: identityDocumentTypeEnum("type").notNull(),
+  documentNumber: text("document_number"),
+  issuingCountry: text("issuing_country"),
+  issueDate: date("issue_date", { mode: "string" }),
+  expiryDate: date("expiry_date", { mode: "string" }),
+  fileRef: text("file_ref").notNull(),
+  // Recorded at upload time (server-validated against the 2 MB limit) —
+  // avoids a Storage round-trip just to show file size in the review queue.
+  fileSizeBytes: integer("file_size_bytes").notNull(),
+  verificationStatus: identityDocumentVerificationStatusEnum("verification_status")
+    .notNull()
+    .default("pending_review"),
+  rejectionReason: text("rejection_reason"),
+  reviewedBy: uuid("reviewed_by").references(() => profiles.id, { onDelete: "set null" }),
+  reviewedAt: timestamp("reviewed_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
+
+// Dedupe log for the expiry-reminder cron (app/api/cron/expiry-reminders) —
+// without this, a daily sweep would re-email the same 90/30/7-day threshold
+// every day until the document is renewed. One row per (document, threshold)
+// pair, ever.
+export const identityDocumentReminders = pgTable(
+  "identity_document_reminders",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    identityDocumentId: uuid("identity_document_id")
+      .notNull()
+      .references(() => identityDocuments.id, { onDelete: "cascade" }),
+    intervalDays: integer("interval_days").notNull(),
+    sentAt: timestamp("sent_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [unique().on(table.identityDocumentId, table.intervalDays)],
+);
+
 export const documentStatusEnum = pgEnum("document_status", [
   "draft",
   "waiting",
@@ -110,6 +269,9 @@ export const templates = pgTable("templates", {
   employerId: uuid("employer_id")
     .notNull()
     .references(() => profiles.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
   name: text("name").notNull(),
   content: text("content").notNull(),
   placeholders: jsonb("placeholders").notNull().default([]),
@@ -131,6 +293,9 @@ export const documents = pgTable("documents", {
   employerId: uuid("employer_id")
     .notNull()
     .references(() => profiles.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
   employeeId: uuid("employee_id")
     .notNull()
     .references(() => employees.id, { onDelete: "cascade" }),
@@ -212,6 +377,10 @@ export const signatures = pgTable("signatures", {
 
 export const auditLogs = pgTable("audit_logs", {
   id: uuid("id").primaryKey().defaultRandom(),
+  // Backfilled from documents.tenant_id where documentId is set; stays
+  // nullable indefinitely (an audit row with no document has no tenant to
+  // attribute it to — RLS simply hides those rows rather than requiring one).
+  tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "cascade" }),
   documentId: uuid("document_id").references(() => documents.id, {
     onDelete: "cascade",
   }),

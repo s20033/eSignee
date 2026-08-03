@@ -1,13 +1,21 @@
-import { Card } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTab, TabsPanel } from "@/components/ui/tabs";
 import { CompanySettingsForm } from "@/features/settings/components/company-settings-form";
-import { getCompanySettings } from "@/features/settings/actions";
+import { SignatorySettingsForm } from "@/features/settings/components/signatory-settings-form";
+import { EmployeeInviteCard } from "@/features/settings/components/employee-invite-card";
+import { getCompanySettings, getEmployeeInviteLink, getSignatorySettings } from "@/features/settings/actions";
 import { MfaSettings } from "@/features/auth/components/mfa-settings";
 import { listMfaFactors } from "@/features/auth/mfa-actions";
+import { ExportDataButton } from "@/features/gdpr/components/export-data-button";
 import { LEGAL_2026 } from "@/lib/legal/constants";
 
 const SettingsPage = async () => {
-  const [defaultValues, mfaFactors] = await Promise.all([getCompanySettings(), listMfaFactors()]);
+  const [defaultValues, signatoryValues, inviteLink, mfaFactors] = await Promise.all([
+    getCompanySettings(),
+    getSignatorySettings(),
+    getEmployeeInviteLink(),
+    listMfaFactors(),
+  ]);
 
   return (
     <div className="space-y-6">
@@ -23,10 +31,13 @@ const SettingsPage = async () => {
           <TabsTab value="company">Company</TabsTab>
           <TabsTab value="statutory">Statutory minimums</TabsTab>
           <TabsTab value="security">Security</TabsTab>
+          <TabsTab value="privacy">Data & Privacy</TabsTab>
         </TabsList>
 
-        <TabsPanel value="company">
+        <TabsPanel value="company" className="space-y-6">
           <CompanySettingsForm defaultValues={defaultValues} />
+          <SignatorySettingsForm defaultValues={signatoryValues} />
+          <EmployeeInviteCard inviteLink={inviteLink} />
         </TabsPanel>
 
         <TabsPanel value="statutory">
@@ -53,6 +64,25 @@ const SettingsPage = async () => {
 
         <TabsPanel value="security">
           <MfaSettings factors={mfaFactors} />
+        </TabsPanel>
+
+        <TabsPanel value="privacy">
+          <Card className="max-w-md">
+            <CardHeader>
+              <CardTitle>Your data</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Download everything stored for your company — branding, employees, templates, documents, and the
+                full audit trail — as a single JSON file.
+              </p>
+              <ExportDataButton />
+              <p className="text-xs text-muted-foreground">
+                To erase a specific employee&apos;s personal data, use the &quot;Anonymize (GDPR erasure)&quot;
+                action on their edit page.
+              </p>
+            </CardContent>
+          </Card>
         </TabsPanel>
       </Tabs>
     </div>

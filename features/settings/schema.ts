@@ -13,6 +13,14 @@ export const companySettingsSchema = z.object({
     .or(z.literal(""))
     .refine((value) => !value || z.url().safeParse(value).success, "Enter a valid URL"),
   notifyOnSignatureNeeded: z.boolean(),
+  defaultSigningPlace: z.string().trim().min(1, "Signing place is required").max(100),
 });
 
 export type CompanySettingsValues = z.infer<typeof companySettingsSchema>;
+
+export const signatorySettingsSchema = z.object({
+  signatoryName: z.string().trim().max(200).optional().or(z.literal("")),
+  signatoryTitle: z.string().trim().max(200).optional().or(z.literal("")),
+});
+
+export type SignatorySettingsValues = z.infer<typeof signatorySettingsSchema>;

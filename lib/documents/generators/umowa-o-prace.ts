@@ -1,5 +1,5 @@
 import { LEGAL_2026 } from "@/lib/legal/constants";
-import { DASH, employerBlock, fullName } from "../helpers";
+import { DASH, employerBlock, fullName, representedByClause } from "../helpers";
 import type { BundleInput, GeneratedDocument } from "../types";
 
 export const generateUmowaOPrace = ({
@@ -22,8 +22,8 @@ export const generateUmowaOPrace = ({
     sections: [
       {
         paragraphs: [
-          `Umowa o pracę zawarta w dniu ${contract.startDate || DASH} w Lublinie (dalej: „Umowa”), pomiędzy:`,
-          `${employerBlock(employer)}, reprezentowaną przez osobę upoważnioną do składania oświadczeń w jej imieniu, zwaną dalej „Pracodawcą”,`,
+          `Umowa o pracę zawarta w dniu ${contract.startDate || DASH} w miejscowości ${employer.signingPlace} (dalej: „Umowa”), pomiędzy:`,
+          `${employerBlock(employer)}, ${representedByClause(employer)}, zwaną dalej „Pracodawcą”,`,
           "a",
           `${fullName(employee)}, PESEL: ${employee.pesel || DASH}, zamieszkałym/ą przy ${employee.address || DASH}, zwanym/ą dalej „Pracownikiem”,`,
           `łącznie zwanymi dalej „Stronami”.`,

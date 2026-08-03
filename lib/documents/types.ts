@@ -54,6 +54,14 @@ export type EmployerData = {
   taxId?: string | null;
   regon?: string | null;
   krs?: string | null;
+  // Place of signing shown in the contract preamble and PDF signature block.
+  // Sourced from the tenant's tenants.defaultSigningPlace.
+  signingPlace: string;
+  // Named signatory shown under the signature line and in the contract
+  // preamble, in place of just the company name. Sourced from
+  // tenant_document_settings — optional, most tenants haven't set one.
+  signatoryName?: string | null;
+  signatoryTitle?: string | null;
 };
 
 export type BundleInput = {

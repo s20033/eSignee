@@ -1,0 +1,1 @@
+ALTER TABLE "tenants" ALTER COLUMN "employee_invite_code" SET NOT NULL;

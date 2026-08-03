@@ -58,6 +58,14 @@ export const CompanySettingsForm = ({ defaultValues }: CompanySettingsFormProps)
         <Input id="address" {...register("address")} />
       </div>
 
+      <div className="space-y-2">
+        <Label htmlFor="defaultSigningPlace">Signing place (shown on contracts)</Label>
+        <Input id="defaultSigningPlace" {...register("defaultSigningPlace")} />
+        {errors.defaultSigningPlace && (
+          <p className="text-sm text-destructive">{errors.defaultSigningPlace.message}</p>
+        )}
+      </div>
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <div className="space-y-2">
           <Label htmlFor="taxId">Tax ID (NIP)</Label>

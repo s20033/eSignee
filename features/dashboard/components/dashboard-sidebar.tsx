@@ -6,16 +6,18 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { PanelLeftCloseIcon, PanelLeftIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { DASHBOARD_NAV_ITEMS, isNavItemActive } from "@/features/dashboard/nav-items";
+import { DASHBOARD_NAV_ITEMS, isNavItemActive, type NavBadgeCounts } from "@/features/dashboard/nav-items";
 
 const STORAGE_KEY = "dashboard-sidebar-collapsed";
 
 type DashboardSidebarProps = {
   companyName: string;
+  badgeCounts: NavBadgeCounts;
 };
 
-export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
+export const DashboardSidebar = ({ companyName, badgeCounts }: DashboardSidebarProps) => {
   const pathname = usePathname();
+  const navItems = DASHBOARD_NAV_ITEMS(badgeCounts);
   const [collapsed, setCollapsed] = useState(false);
   // The real state only exists in localStorage, so it's read after mount — `mounted`
   // gates the width transition so that correction is an instant snap, not an animated flash.
@@ -50,7 +52,7 @@ export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
       </div>
 
       <nav className="flex-1 space-y-1 p-2">
-        {DASHBOARD_NAV_ITEMS.map((item) => {
+        {navItems.map((item) => {
           const isActive = isNavItemActive(pathname, item.href);
           const Icon = item.icon;
 
@@ -68,7 +70,12 @@ export const DashboardSidebar = ({ companyName }: DashboardSidebarProps) => {
               )}
             >
               <Icon className="size-4.5 shrink-0" />
-              {!collapsed && <span className="truncate">{item.label}</span>}
+              {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+              {!!item.badgeCount && (
+                <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary text-[11px] font-semibold text-primary-foreground">
+                  {item.badgeCount}
+                </span>
+              )}
             </Link>
           );
         })}

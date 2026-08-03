@@ -6,7 +6,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Button } from "@/components/ui/button";
 import { createEmployee, updateEmployee } from "../actions";
-import { employeeFormSchema, type EmployeeFormValues } from "../schema";
+import { employeeFormSchema, emptyEmployeeFormValues, type EmployeeFormValues } from "../schema";
 import { PersonalInfoFields } from "./personal-info-fields";
 import { BankingFields } from "./banking-fields";
 import { EmploymentFields } from "./employment-fields";
@@ -15,32 +15,6 @@ import { ForeignerStatusFields } from "./foreigner-status-fields";
 type EmployeeFormProps = {
   employeeId?: string;
   defaultValues?: EmployeeFormValues;
-};
-
-const emptyValues: EmployeeFormValues = {
-  fullName: "",
-  email: "",
-  position: "",
-  salary: "",
-  startDate: "",
-  endDate: "",
-  passportNumber: "",
-  pesel: "",
-  nationality: "",
-  address: "",
-  bankName: "",
-  iban: "",
-  jobDescription: "",
-  hourlyRate: "",
-  minHoursPerWeek: "",
-  accommodationCost: "",
-  isForeigner: false,
-  citizenship: "",
-  foreignerDocumentType: undefined,
-  foreignerDocumentNumber: "",
-  foreignerDocumentExpiry: "",
-  workBasis: "",
-  isStudent: false,
 };
 
 export const EmployeeForm = ({ employeeId, defaultValues }: EmployeeFormProps) => {
@@ -54,7 +28,7 @@ export const EmployeeForm = ({ employeeId, defaultValues }: EmployeeFormProps) =
     formState: { errors, isSubmitting },
   } = useForm<EmployeeFormValues>({
     resolver: zodResolver(employeeFormSchema),
-    defaultValues: defaultValues ?? emptyValues,
+    defaultValues: defaultValues ?? emptyEmployeeFormValues,
   });
 
   const isForeigner = watch("isForeigner");

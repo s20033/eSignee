@@ -13,12 +13,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { StatCard } from "@/features/dashboard/components/stat-card";
+import { NeedsAttentionCard } from "@/features/dashboard/components/needs-attention-card";
 import { ContractExpiryTracker } from "@/features/dashboard/components/contract-expiry-tracker";
 import { MonthlyDocumentsChart } from "@/features/dashboard/components/monthly-documents-chart";
 import { DocumentStatusPieChart } from "@/features/dashboard/components/document-status-pie-chart";
 import { RecentDocuments } from "@/features/dashboard/components/recent-documents";
 import { AuditTrail } from "@/features/documents/components/audit-trail";
 import { listDocuments } from "@/features/documents/actions";
+import { countPendingEmployees } from "@/features/approvals/actions";
+import { countPendingIdentityDocumentReviews } from "@/features/identity-documents/actions";
 import {
   getDashboardStats,
   getUpcomingContractExpirations,
@@ -27,12 +30,15 @@ import {
 import { DOCUMENT_STATUS_LABELS } from "@/lib/documents/status-labels";
 
 const DashboardPage = async () => {
-  const [stats, expirations, monthlyCounts, recentDocuments] = await Promise.all([
-    getDashboardStats(),
-    getUpcomingContractExpirations(),
-    getMonthlyDocumentCounts(),
-    listDocuments("", 1),
-  ]);
+  const [stats, expirations, monthlyCounts, recentDocuments, pendingApprovalsCount, pendingIdentityDocumentReviewsCount] =
+    await Promise.all([
+      getDashboardStats(),
+      getUpcomingContractExpirations(),
+      getMonthlyDocumentCounts(),
+      listDocuments("", 1),
+      countPendingEmployees(),
+      countPendingIdentityDocumentReviews(),
+    ]);
   const pendingSignatures = stats.documentsByStatus.waiting + stats.documentsByStatus.employee_signed;
   const totalDocuments = Object.values(stats.documentsByStatus).reduce((sum, count) => sum + count, 0);
   const completionRate = totalDocuments === 0 ? 0 : Math.round((stats.documentsByStatus.completed / totalDocuments) * 100);
@@ -51,6 +57,11 @@ const DashboardPage = async () => {
           Add employee
         </Button>
       </div>
+
+      <NeedsAttentionCard
+        pendingApprovalsCount={pendingApprovalsCount}
+        pendingIdentityDocumentReviewsCount={pendingIdentityDocumentReviewsCount}
+      />
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         <StatCard label="Employees" value={stats.employeeCount} icon={UsersIcon} />

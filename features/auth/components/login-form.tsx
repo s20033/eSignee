@@ -40,7 +40,7 @@ export const LoginForm = () => {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(result.redirectTo);
     router.refresh();
   });
 
@@ -55,7 +55,7 @@ export const LoginForm = () => {
       return;
     }
 
-    router.push("/dashboard");
+    router.push(result.redirectTo);
     router.refresh();
   });
 

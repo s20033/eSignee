@@ -1,6 +1,8 @@
 import { notFound } from "next/navigation";
 import { Breadcrumbs } from "@/components/shared/breadcrumbs";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmployeeForm } from "@/features/employees/components/employee-form";
+import { AnonymizeEmployeeDialog } from "@/features/gdpr/components/anonymize-employee-dialog";
 import { getEmployeeById } from "@/features/employees/actions";
 
 type EditEmployeePageProps = {
@@ -55,6 +57,15 @@ const EditEmployeePage = async ({ params }: EditEmployeePageProps) => {
           isStudent: employee.isStudent,
         }}
       />
+
+      <Card className="max-w-2xl border-destructive/30">
+        <CardHeader>
+          <CardTitle className="text-destructive">Danger zone</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <AnonymizeEmployeeDialog employeeId={employee.id} employeeName={employee.fullName} />
+        </CardContent>
+      </Card>
     </div>
   );
 };
