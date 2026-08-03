@@ -3,6 +3,11 @@ import { loadFonts } from "./fonts";
 import { wrapText } from "./layout";
 import { PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, COLORS, type SignatureBlockLayout } from "./chrome";
 
+// Real handwritten signatures read as small marks, not blown-up graphics — this cap
+// keeps pdf-lib's scaleToFit from stretching the certificate-page copy to fill its box.
+const CERT_SIGNATURE_MAX_WIDTH = 130;
+const CERT_SIGNATURE_MAX_HEIGHT = 38;
+
 const dataUrlToBytes = (dataUrl: string): Uint8Array => {
   const base64 = dataUrl.split(",")[1] ?? "";
   return Uint8Array.from(Buffer.from(base64, "base64"));
@@ -25,9 +30,10 @@ const embedImageFromUrl = async (pdfDoc: PDFDocument, url: string): Promise<PDFI
 };
 
 // Footer-row marks, centered at the bottom of every page, clear of the "Wygenerowano" /
-// "Strona X z Y" footer text and the separator line above it.
-const FOOTER_MARK_MAX_WIDTH = 50;
-const FOOTER_MARK_MAX_HEIGHT = 35;
+// "Strona X z Y" footer text and the separator line above it. Sized like a small
+// initials mark, not a full-size signature.
+const FOOTER_MARK_MAX_WIDTH = 36;
+const FOOTER_MARK_MAX_HEIGHT = 16;
 const FOOTER_MARK_Y = 3;
 const FOOTER_MARK_GAP = 10;
 const FOOTER_MARK_SLOT_X: Record<"employee" | "employer", number> = {
@@ -78,7 +84,9 @@ export const applySignatureToDocument = async (
     const page = pdfDoc.getPage(options.layout.pageIndex);
     const dims = signatureImage.scaleToFit(rect.maxWidth, rect.maxHeight);
     const signatureX = rect.x + (rect.maxWidth - dims.width) / 2;
-    const signatureY = rect.y + (rect.maxHeight - dims.height) / 2;
+    // Rests just above the line, like an actual signature, rather than floating
+    // centered in the (now much shorter) placeholder box.
+    const signatureY = rect.y + 4;
     page.drawImage(signatureImage, { x: signatureX, y: signatureY, width: dims.width, height: dims.height });
 
     if (options.role === "employer" && options.layout.employer && options.stampUrl) {
@@ -164,7 +172,7 @@ export const applySignatureToDocument = async (
   certPage.drawText("Podpis / Signature:", { x: MARGIN, y, size: 9, font: boldFont, color: COLORS.black });
   y -= 10;
 
-  const certDims = signatureImage.scaleToFit(220, 80);
+  const certDims = signatureImage.scaleToFit(CERT_SIGNATURE_MAX_WIDTH, CERT_SIGNATURE_MAX_HEIGHT);
   certPage.drawRectangle({
     x: MARGIN,
     y: y - certDims.height - 8,

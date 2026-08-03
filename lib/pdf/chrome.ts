@@ -125,8 +125,12 @@ export type SignatureBlockLayout = {
   employee: SignatureRect | null;
 };
 
-const STAMP_SIZE = 70;
-const SIGNATURE_SLOT_HEIGHT = 100;
+const STAMP_SIZE = 45;
+const SIGNATURE_SLOT_HEIGHT = 60;
+// A real pen signature sits roughly 10-14mm tall above the line — capping the
+// image here (independent of SIGNATURE_SLOT_HEIGHT, which only reserves layout
+// space for the label + stamp) keeps scaleToFit from blowing it up to fill the slot.
+const SIGNATURE_IMAGE_MAX_HEIGHT = 32;
 
 /**
  * Draws the "who signs where" block on the current page and returns the coordinates
@@ -145,7 +149,7 @@ export const drawSignatureBlock = (
 
   cursor.ensureSpace(220);
   cursor.y -= 10;
-  cursor.drawText(`Miejsce i data: Lublin, dnia ${meta.signDate}`, fonts.regular, 9, COLORS.gray);
+  cursor.drawText(`Miejsce i data: ${meta.employer.signingPlace}, dnia ${meta.signDate}`, fonts.regular, 9, COLORS.gray);
   cursor.y -= 16;
 
   const colWidth = (CONTENT_WIDTH - 20) / 2;
@@ -171,7 +175,7 @@ export const drawSignatureBlock = (
       x: reserveStampSpace ? x + STAMP_SIZE + 15 : x,
       y: lineYPos,
       maxWidth: reserveStampSpace ? colWidth - STAMP_SIZE - 15 : colWidth,
-      maxHeight: SIGNATURE_SLOT_HEIGHT,
+      maxHeight: SIGNATURE_IMAGE_MAX_HEIGHT,
     };
     const stamp = reserveStampSpace
       ? { x, y: lineYPos + (SIGNATURE_SLOT_HEIGHT - STAMP_SIZE) / 2, size: STAMP_SIZE }
@@ -183,13 +187,17 @@ export const drawSignatureBlock = (
   let employer: SignatureBlockLayout["employer"] = null;
   let employee: SignatureRect | null = null;
 
+  const employerSignatoryLabel = meta.employer.signatoryName
+    ? `${meta.employer.name} — ${meta.employer.signatoryName}${meta.employer.signatoryTitle ? `, ${meta.employer.signatoryTitle}` : ""}`
+    : meta.employer.name;
+
   if (signature === "two-party") {
-    const employerCol = drawColumn(MARGIN, "Pracodawca / Zleceniodawca:", meta.employer.name, true);
+    const employerCol = drawColumn(MARGIN, "Pracodawca / Zleceniodawca:", employerSignatoryLabel, true);
     const employeeCol = drawColumn(MARGIN + colWidth + 20, "Pracownik / Zleceniobiorca:", meta.employeeName, false);
     employer = { ...employerCol.rect, stamp: employerCol.stamp! };
     employee = employeeCol.rect;
   } else if (signature === "employer") {
-    const employerCol = drawColumn(MARGIN, "Pracodawca / Zleceniodawca:", meta.employer.name, true);
+    const employerCol = drawColumn(MARGIN, "Pracodawca / Zleceniodawca:", employerSignatoryLabel, true);
     employer = { ...employerCol.rect, stamp: employerCol.stamp! };
   } else {
     const employeeCol = drawColumn(MARGIN, "Pracownik / Zleceniobiorca:", meta.employeeName, false);
