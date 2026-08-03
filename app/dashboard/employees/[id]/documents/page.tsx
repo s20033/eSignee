@@ -9,9 +9,11 @@ import { GenerateFromTemplateForm } from "@/features/documents/components/genera
 import { DocumentBundleList } from "@/features/documents/components/document-bundle-list";
 import { AuditTrail } from "@/features/documents/components/audit-trail";
 import { EmployeeSummaryCard } from "@/features/employees/components/employee-summary-card";
+import { EmployeeIdentityDocumentsTable } from "@/features/identity-documents/components/employee-identity-documents-table";
 import { listDocumentAuditLog, listDocumentBundles } from "@/features/documents/actions";
 import { listTemplatesForPicker } from "@/features/templates/actions";
 import { getEmployeeById } from "@/features/employees/actions";
+import { listIdentityDocumentsForEmployee } from "@/features/identity-documents/actions";
 
 type EmployeeDocumentsPageProps = {
   params: Promise<{ id: string }>;
@@ -25,10 +27,11 @@ const EmployeeDocumentsPage = async ({ params }: EmployeeDocumentsPageProps) => 
     notFound();
   }
 
-  const [bundles, auditEntries, templates] = await Promise.all([
+  const [bundles, auditEntries, templates, identityDocuments] = await Promise.all([
     listDocumentBundles(id),
     listDocumentAuditLog(id),
     listTemplatesForPicker(),
+    listIdentityDocumentsForEmployee(id),
   ]);
 
   return (
@@ -64,12 +67,16 @@ const EmployeeDocumentsPage = async ({ params }: EmployeeDocumentsPageProps) => 
       <Tabs defaultValue="documents">
         <TabsList>
           <TabsTab value="documents">Documents</TabsTab>
+          <TabsTab value="identity-documents">Identity documents</TabsTab>
           <TabsTab value="activity">Activity</TabsTab>
           <TabsTab value="new-contract">New contract</TabsTab>
           <TabsTab value="from-template">From template</TabsTab>
         </TabsList>
         <TabsPanel value="documents">
           <DocumentBundleList bundles={bundles} />
+        </TabsPanel>
+        <TabsPanel value="identity-documents">
+          <EmployeeIdentityDocumentsTable documents={identityDocuments} />
         </TabsPanel>
         <TabsPanel value="activity">
           <AuditTrail entries={auditEntries} />

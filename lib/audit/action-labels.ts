@@ -26,6 +26,7 @@ export const ACTION_LABELS: Record<string, string> = {
   "identity_document.uploaded": "ID document uploaded",
   "identity_document.verified": "ID document verified",
   "identity_document.rejected": "ID document rejected",
+  "identity_document.deleted": "ID document deleted",
   "identity_document.expiry_reminder_sent": "Expiry reminder sent",
   "super_admin.tenant_plan_updated": "Plan changed",
   "super_admin.tenant_status_updated": "Tenant status changed",

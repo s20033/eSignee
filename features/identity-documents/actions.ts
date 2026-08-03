@@ -13,20 +13,19 @@ import { toCsv } from "@/lib/csv";
 import {
   IDENTITY_DOCUMENT_TYPES,
   IDENTITY_DOCUMENT_TYPE_LABELS,
+  IDENTITY_DOCUMENT_VERIFICATION_STATUSES,
   MAX_IDENTITY_DOCUMENT_SIZE_BYTES,
   rejectIdentityDocumentSchema,
   uploadIdentityDocumentSchema,
   type IdentityDocumentType,
+  type IdentityDocumentVerificationStatus,
 } from "./schema";
-
-const VERIFICATION_STATUSES = ["pending_review", "verified", "rejected"] as const;
-type VerificationStatus = (typeof VERIFICATION_STATUSES)[number];
 
 const isIdentityDocumentType = (value: string): value is IdentityDocumentType =>
   (IDENTITY_DOCUMENT_TYPES as readonly string[]).includes(value);
 
-const isVerificationStatus = (value: string): value is VerificationStatus =>
-  (VERIFICATION_STATUSES as readonly string[]).includes(value);
+const isVerificationStatus = (value: string): value is IdentityDocumentVerificationStatus =>
+  (IDENTITY_DOCUMENT_VERIFICATION_STATUSES as readonly string[]).includes(value);
 
 const BUCKET = "identity-documents";
 
@@ -292,6 +291,49 @@ export const verifyIdentityDocument = async (id: string): Promise<IdentityDocume
   });
 
   revalidatePath("/dashboard/identity-documents");
+  return { success: true };
+};
+
+/** Tenant Admin-facing: every identity document on file for one employee (any status), newest first — powers the employee detail page's "Identity documents" tab, where verified/rejected uploads are still reviewable after the fact. */
+export const listIdentityDocumentsForEmployee = async (employeeId: string) => {
+  const profile = await requireTenantAdmin();
+
+  return db
+    .select()
+    .from(identityDocuments)
+    .where(
+      and(
+        eq(identityDocuments.employeeId, employeeId),
+        eq(identityDocuments.tenantId, profile.tenantId),
+        isNull(identityDocuments.deletedAt),
+      ),
+    )
+    .orderBy(desc(identityDocuments.createdAt));
+};
+
+export const deleteIdentityDocument = async (id: string): Promise<IdentityDocumentActionResult> => {
+  const profile = await requireTenantAdmin();
+
+  const [doc] = await db
+    .select({ id: identityDocuments.id, employeeId: identityDocuments.employeeId })
+    .from(identityDocuments)
+    .where(and(eq(identityDocuments.id, id), eq(identityDocuments.tenantId, profile.tenantId)))
+    .limit(1);
+
+  if (!doc) return { success: false, error: "Document not found." };
+
+  await db.update(identityDocuments).set({ deletedAt: new Date() }).where(eq(identityDocuments.id, id));
+
+  await logAuditEvent({
+    action: "identity_document.deleted",
+    actorEmail: profile.email,
+    tenantId: profile.tenantId,
+    metadata: { identityDocumentId: id, employeeId: doc.employeeId },
+  });
+
+  revalidatePath(`/dashboard/employees/${doc.employeeId}/documents`);
+  revalidatePath("/dashboard/identity-documents");
+  revalidatePath("/dashboard/compliance");
   return { success: true };
 };
 

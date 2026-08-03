@@ -1,19 +1,13 @@
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { IDENTITY_DOCUMENT_TYPE_LABELS } from "../schema";
+import { IDENTITY_DOCUMENT_TYPE_LABELS, VERIFICATION_STATUS_BADGE } from "../schema";
 import type { listAllIdentityDocuments } from "../actions";
 
 type ComplianceRow = Awaited<ReturnType<typeof listAllIdentityDocuments>>[number];
 
 type ComplianceTableProps = {
   rows: ComplianceRow[];
-};
-
-const STATUS_BADGE: Record<ComplianceRow["verificationStatus"], { label: string; variant: "secondary" | "default" | "destructive" }> = {
-  pending_review: { label: "Pending review", variant: "secondary" },
-  verified: { label: "Verified", variant: "default" },
-  rejected: { label: "Rejected", variant: "destructive" },
 };
 
 const daysUntil = (dateString: string) => {
@@ -40,7 +34,7 @@ export const ComplianceTable = ({ rows }: ComplianceTableProps) => {
       </TableHeader>
       <TableBody>
         {rows.map((row) => {
-          const status = STATUS_BADGE[row.verificationStatus];
+          const status = VERIFICATION_STATUS_BADGE[row.verificationStatus];
           const remaining = row.expiryDate ? daysUntil(row.expiryDate) : null;
           const isUrgent = remaining !== null && remaining <= 30;
 

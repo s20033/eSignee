@@ -37,3 +37,16 @@ export const rejectIdentityDocumentSchema = z.object({
 });
 
 export type RejectIdentityDocumentFormValues = z.infer<typeof rejectIdentityDocumentSchema>;
+
+export const IDENTITY_DOCUMENT_VERIFICATION_STATUSES = ["pending_review", "verified", "rejected"] as const;
+
+export type IdentityDocumentVerificationStatus = (typeof IDENTITY_DOCUMENT_VERIFICATION_STATUSES)[number];
+
+export const VERIFICATION_STATUS_BADGE: Record<
+  IdentityDocumentVerificationStatus,
+  { label: string; variant: "secondary" | "default" | "destructive" }
+> = {
+  pending_review: { label: "Pending review", variant: "secondary" },
+  verified: { label: "Verified", variant: "default" },
+  rejected: { label: "Rejected", variant: "destructive" },
+};
