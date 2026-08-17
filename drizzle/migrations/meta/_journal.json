@@ -162,6 +162,20 @@
       "when": 1785754684921,
       "tag": "0022_identity_document_reminders_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1786982292649,
+      "tag": "0023_external_signees",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1786982300000,
+      "tag": "0024_signees_rls",
+      "breakpoints": true
     }
   ]
 }

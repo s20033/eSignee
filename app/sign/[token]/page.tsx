@@ -27,7 +27,7 @@ const SignPage = async ({ params }: SignPageProps) => {
   const previews = await getSigningSessionPreviewUrls(token);
   await Promise.all(session.map(({ document }) => logDocumentViewed(document.id)));
 
-  const { companyName, employeeName } = session[0];
+  const { companyName, partyName } = session[0];
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 px-4 py-10">
@@ -36,7 +36,7 @@ const SignPage = async ({ params }: SignPageProps) => {
           {session.length === 1 ? session[0].document.title : `${session.length} documents to sign`}
         </h1>
         <p className="text-sm text-muted-foreground">
-          Sent by {companyName} to {employeeName}
+          Sent by {companyName} to {partyName}
         </p>
       </div>
 

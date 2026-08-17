@@ -18,7 +18,7 @@ export const RecentDocuments = ({ documents }: RecentDocumentsProps) => {
         <li key={document.id} className="flex items-center justify-between gap-3">
           <Link href={`/dashboard/documents/${document.id}`} className="min-w-0 flex-1 truncate hover:underline">
             <span className="font-medium">{document.title}</span>
-            <span className="text-muted-foreground"> — {document.employeeName}</span>
+            <span className="text-muted-foreground"> — {document.partyName}</span>
           </Link>
           <Badge variant="outline" className="shrink-0">
             {DOCUMENT_STATUS_LABELS[document.status]}

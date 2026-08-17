@@ -1,5 +1,6 @@
 import {
   boolean,
+  check,
   date,
   integer,
   jsonb,
@@ -12,6 +13,7 @@ import {
   unique,
   uuid,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 const authSchema = pgSchema("auth");
 
@@ -179,6 +181,32 @@ export const employees = pgTable("employees", {
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
 
+// Lightweight reusable contact for an external (non-employee) signer — a company
+// or individual outside the tenant's own workforce. Deliberately minimal, unlike
+// `employees`: no salary/PESEL/banking/employment fields, just enough to send and
+// re-send documents to the same counterparty.
+export const signees = pgTable("signees", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  employerId: uuid("employer_id")
+    .notNull()
+    .references(() => profiles.id, { onDelete: "cascade" }),
+  tenantId: uuid("tenant_id")
+    .notNull()
+    .references(() => tenants.id, { onDelete: "cascade" }),
+  // Person's name, or the signing individual's name when representing a company
+  // (companyName below disambiguates, e.g. "Jan Kowalski — Acme Sp. z o.o.").
+  fullName: text("full_name").notNull(),
+  email: text("email").notNull(),
+  companyName: text("company_name"),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+  deletedAt: timestamp("deleted_at", { withTimezone: true }),
+});
+
 export const identityDocumentTypeEnum = pgEnum("identity_document_type", [
   "passport",
   "national_id",
@@ -288,60 +316,76 @@ export const templates = pgTable("templates", {
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
 });
 
-export const documents = pgTable("documents", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  employerId: uuid("employer_id")
-    .notNull()
-    .references(() => profiles.id, { onDelete: "cascade" }),
-  tenantId: uuid("tenant_id")
-    .notNull()
-    .references(() => tenants.id, { onDelete: "cascade" }),
-  employeeId: uuid("employee_id")
-    .notNull()
-    .references(() => employees.id, { onDelete: "cascade" }),
-  // Nullable: contract-bundle documents (see lib/documents/generators) are
-  // code-driven, not backed by an editable Template row.
-  templateId: uuid("template_id").references(() => templates.id),
-  title: text("title").notNull(),
-  // Generator id (e.g. "umowa_zlecenie") for bundle documents, null for
-  // Template-CRUD-driven documents.
-  kind: text("kind"),
-  // Groups every document produced by one "generate contract" action.
-  bundleId: uuid("bundle_id"),
-  // Contract end date (main umowa_zlecenie/umowa_o_prace docs only) — powers the
-  // dashboard's upcoming-expiration tracker. Null for annexes and open-ended contracts.
-  expiresAt: date("expires_at", { mode: "string" }),
-  // Who must sign — mirrors GeneratedDocument["signature"] from lib/documents/types.
-  signatureType: text("signature_type"),
-  // Secure token for the no-login employee signing link. Cleared once used.
-  // Not unique: every document generated in one batch that needs an employee
-  // signature shares the same token, so the employee signs the whole batch in
-  // one visit ("signing session") instead of getting one link per document.
-  signingToken: text("signing_token"),
-  // Coordinates of the signature-block placeholder(s) drawn at generation time,
-  // so a later signing step can place the real signature image in the right spot.
-  signatureLayout: jsonb("signature_layout"),
-  status: documentStatusEnum("status").notNull().default("draft"),
-  pdfUrl: text("pdf_url"),
-  finalPdfUrl: text("final_pdf_url"),
-  // Document Management module — see lib/documents/document-service.ts
-  deletedAt: timestamp("deleted_at", { withTimezone: true }),
-  category: documentCategoryEnum("category").notNull().default("hr"),
-  // Only meaningful when category = "custom".
-  customCategoryLabel: text("custom_category_label"),
-  // SHA-256 of the current (latest version's) PDF bytes — shown on the Audit
-  // Report and the public verification page.
-  sha256Hash: text("sha256_hash"),
-  // Starts at 0 — recordDocumentVersion (lib/documents/document-service.ts) always increments by
-  // one, so the first recorded version becomes 1.
-  currentVersion: integer("current_version").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp("updated_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const documents = pgTable(
+  "documents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    employerId: uuid("employer_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id")
+      .notNull()
+      .references(() => tenants.id, { onDelete: "cascade" }),
+    // Exactly one of employeeId/signeeId is set — see documents_party_check below.
+    // Nullable: a document sent to an external signee has no employees row at all.
+    employeeId: uuid("employee_id").references(() => employees.id, { onDelete: "cascade" }),
+    signeeId: uuid("signee_id").references(() => signees.id, { onDelete: "cascade" }),
+    // Nullable: contract-bundle documents (see lib/documents/generators) are
+    // code-driven, not backed by an editable Template row.
+    templateId: uuid("template_id").references(() => templates.id),
+    title: text("title").notNull(),
+    // Generator id (e.g. "umowa_zlecenie") for bundle documents, null for
+    // Template-CRUD-driven documents.
+    kind: text("kind"),
+    // Groups every document produced by one "generate contract" action.
+    bundleId: uuid("bundle_id"),
+    // Contract end date (main umowa_zlecenie/umowa_o_prace docs only) — powers the
+    // dashboard's upcoming-expiration tracker. Null for annexes and open-ended contracts.
+    expiresAt: date("expires_at", { mode: "string" }),
+    // Who must sign — mirrors GeneratedDocument["signature"] from lib/documents/types.
+    signatureType: text("signature_type"),
+    // Secure token for the no-login employee signing link. Cleared once used.
+    // Not unique: every document generated in one batch that needs an employee
+    // signature shares the same token, so the employee signs the whole batch in
+    // one visit ("signing session") instead of getting one link per document.
+    signingToken: text("signing_token"),
+    // Coordinates of the signature-block placeholder(s) drawn at generation time,
+    // so a later signing step can place the real signature image in the right spot.
+    signatureLayout: jsonb("signature_layout"),
+    // Free-text party-role labels for the in-document signature block and the
+    // signing certificate — only set for signee-based documents (e.g. "Wynajmujący" /
+    // "Najemca"). Null for employee-based documents, which keep the existing
+    // hardcoded "Pracodawca / Zleceniodawca" / "Pracownik / Zleceniobiorca" pair.
+    senderRoleLabel: text("sender_role_label"),
+    counterpartyRoleLabel: text("counterparty_role_label"),
+    status: documentStatusEnum("status").notNull().default("draft"),
+    pdfUrl: text("pdf_url"),
+    finalPdfUrl: text("final_pdf_url"),
+    // Document Management module — see lib/documents/document-service.ts
+    deletedAt: timestamp("deleted_at", { withTimezone: true }),
+    category: documentCategoryEnum("category").notNull().default("hr"),
+    // Only meaningful when category = "custom".
+    customCategoryLabel: text("custom_category_label"),
+    // SHA-256 of the current (latest version's) PDF bytes — shown on the Audit
+    // Report and the public verification page.
+    sha256Hash: text("sha256_hash"),
+    // Starts at 0 — recordDocumentVersion (lib/documents/document-service.ts) always increments by
+    // one, so the first recorded version becomes 1.
+    currentVersion: integer("current_version").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    check(
+      "documents_party_check",
+      sql`((${table.employeeId} is not null)::int + (${table.signeeId} is not null)::int) = 1`,
+    ),
+  ],
+);
 
 // Immutable snapshot of a document's PDF at one point in its lifecycle
 // (generated / employee signed / employer signed / completed). Never

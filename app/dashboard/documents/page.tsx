@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
 import { QuerySearch } from "@/components/shared/query-search";
 import { QueryPagination } from "@/components/shared/query-pagination";
 import { DocumentTable } from "@/features/documents/components/document-table";
@@ -22,14 +24,21 @@ const DocumentsPage = async ({ searchParams }: DocumentsPageProps) => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Documents</h1>
-      <p className="text-sm text-muted-foreground">
-        Every document generated for your company — preview, download, delete, restore, and track its full history in
-        one place.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h1 className="text-2xl font-semibold">Documents</h1>
+          <p className="text-sm text-muted-foreground">
+            Every document generated for your company — preview, download, delete, restore, and track its full
+            history in one place.
+          </p>
+        </div>
+        <Button variant="outline" nativeButton={false} render={<Link href="/dashboard/documents/new" />}>
+          New document for a signee
+        </Button>
+      </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <QuerySearch placeholder="Search by title or employee" />
+        <QuerySearch placeholder="Search by title or signer" />
         <DocumentFilters />
       </div>
       <DocumentTable key={`${page}-${search}-${params.status ?? ""}-${params.category ?? ""}`} documents={documents} />

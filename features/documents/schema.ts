@@ -33,3 +33,15 @@ export const generateFromTemplatesSchema = z.object({
 });
 
 export type GenerateFromTemplatesValues = z.infer<typeof generateFromTemplatesSchema>;
+
+export const generateFromTemplatesForSigneeSchema = generateFromTemplatesSchema.extend({
+  senderRoleLabel: z.string().trim().min(1, "Enter a label for your role").max(100).default("Zleceniodawca"),
+  counterpartyRoleLabel: z
+    .string()
+    .trim()
+    .min(1, "Enter a label for the signee's role")
+    .max(100)
+    .default("Kontrahent"),
+});
+
+export type GenerateFromTemplatesForSigneeValues = z.infer<typeof generateFromTemplatesForSigneeSchema>;

@@ -43,7 +43,7 @@ export const DocumentTable = ({ documents }: DocumentTableProps) => {
               />
             </TableHead>
             <TableHead>Title</TableHead>
-            <TableHead>Employee</TableHead>
+            <TableHead>Signer</TableHead>
             <TableHead>Category</TableHead>
             <TableHead>Status</TableHead>
             <TableHead>Created</TableHead>
@@ -65,7 +65,7 @@ export const DocumentTable = ({ documents }: DocumentTableProps) => {
                   {document.title}
                 </Link>
               </TableCell>
-              <TableCell>{document.employeeName}</TableCell>
+              <TableCell>{document.partyName}</TableCell>
               <TableCell>
                 <Badge variant="secondary">{documentCategoryLabel(document)}</Badge>
               </TableCell>

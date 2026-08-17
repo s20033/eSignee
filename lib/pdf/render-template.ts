@@ -1,6 +1,6 @@
 import { PDFDocument } from "pdf-lib";
 import { loadFonts } from "./fonts";
-import { createCursor, drawFooter, drawSignatureBlock, COLORS, type SignatureBlockLayout } from "./chrome";
+import { createCursor, drawFooter, drawSignatureBlock, COLORS, type RoleLabels, type SignatureBlockLayout } from "./chrome";
 import { disclaimerNote } from "@/lib/documents/helpers";
 import type { EmployerData, SignatureType } from "@/lib/documents/types";
 
@@ -10,6 +10,7 @@ export type RenderTemplateMeta = {
   employeeName: string;
   signDate: string;
   signatureType: SignatureType;
+  roleLabels?: RoleLabels | null;
 };
 
 export type RenderedDocument = {
@@ -42,7 +43,7 @@ export const renderTemplateDocumentToPdf = async (
     pdfDoc,
     cursor,
     meta.signatureType,
-    { employer, employeeName: meta.employeeName, signDate: meta.signDate },
+    { employer, employeeName: meta.employeeName, signDate: meta.signDate, roleLabels: meta.roleLabels },
     fonts,
   );
 

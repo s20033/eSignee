@@ -1,6 +1,7 @@
 import {
   LayoutDashboardIcon,
   UsersIcon,
+  UserPlusIcon,
   FilesIcon,
   FileTextIcon,
   UserCheckIcon,
@@ -32,6 +33,7 @@ export const DASHBOARD_NAV_ITEMS = ({
 }: NavBadgeCounts): NavItem[] => [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboardIcon },
   { href: "/dashboard/employees", label: "Employees", icon: UsersIcon },
+  { href: "/dashboard/signees", label: "Signees", icon: UserPlusIcon },
   {
     href: "/dashboard/approvals",
     label: "Pending approvals",

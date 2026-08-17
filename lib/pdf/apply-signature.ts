@@ -1,14 +1,14 @@
-import { PDFDocument, type PDFImage, rgb } from "pdf-lib";
+import { PDFDocument, type PDFFont, type PDFImage, type PDFPage, rgb } from "pdf-lib";
 import { loadFonts } from "./fonts";
 import { wrapText } from "./layout";
 import { PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, COLORS, type SignatureBlockLayout } from "./chrome";
 
 // Real handwritten signatures read as small marks, not blown-up graphics — this cap
 // keeps pdf-lib's scaleToFit from stretching the certificate-page copy to fill its box.
-const CERT_SIGNATURE_MAX_WIDTH = 130;
-const CERT_SIGNATURE_MAX_HEIGHT = 38;
+const CERT_SIGNATURE_MAX_WIDTH = 120;
+const CERT_SIGNATURE_MAX_HEIGHT = 36;
 
-const dataUrlToBytes = (dataUrl: string): Uint8Array => {
+export const dataUrlToBytes = (dataUrl: string): Uint8Array => {
   const base64 = dataUrl.split(",")[1] ?? "";
   return Uint8Array.from(Buffer.from(base64, "base64"));
 };
@@ -41,34 +41,28 @@ const FOOTER_MARK_SLOT_X: Record<"employee" | "employer", number> = {
   employee: PAGE_WIDTH / 2 + FOOTER_MARK_GAP / 2,
 };
 
-type ApplySignatureOptions = {
+type ApplySignatureMarksOptions = {
   role: "employee" | "employer";
   layout: SignatureBlockLayout | null;
-  signerLabel: string;
-  signerName: string;
   signatureDataUrl: string;
-  consentText: string;
-  signedAt: Date;
-  ipAddress: string | null;
-  userAgent: string | null;
-  documentTitle: string;
   /** Employer's own logo/stamp image URL (profiles.logoUrl) — used as the stamp next to the employer's signature. */
   stampUrl?: string | null;
 };
 
 /**
- * Applies one party's signature to a document: a small mark in the footer of every
- * existing page (so a page can't be silently swapped out of a signed set), the full
- * signature in the document's own signature-block placeholder, the employer's own
- * logo/stamp next to their signature, and a certificate page with the legal audit
- * trail (signer, timestamp, IP, consent text) — kept alongside the inline placement.
+ * Stamps one party's signature onto the document: a small mark in the footer of
+ * every existing page (so a page can't be silently swapped out of a signed set),
+ * the full signature in the document's own signature-block placeholder, and the
+ * employer's own logo/stamp next to their signature. Does NOT add a certificate
+ * page — call `appendCertificatePage` once the document reaches its final signed
+ * state (see `applySignatureToDocument` for the common single-signer case, which
+ * does both in one call).
  */
-export const applySignatureToDocument = async (
+export const applySignatureMarks = async (
   pdfBytes: Uint8Array,
-  options: ApplySignatureOptions,
+  options: ApplySignatureMarksOptions,
 ): Promise<Uint8Array> => {
   const pdfDoc = await PDFDocument.load(pdfBytes);
-  const { regular: font, bold: boldFont } = await loadFonts(pdfDoc);
   const signatureImage = await pdfDoc.embedPng(dataUrlToBytes(options.signatureDataUrl));
 
   const markDims = signatureImage.scaleToFit(FOOTER_MARK_MAX_WIDTH, FOOTER_MARK_MAX_HEIGHT);
@@ -99,6 +93,200 @@ export const applySignatureToDocument = async (
     }
   }
 
+  return pdfDoc.save();
+};
+
+export type SignerCertEntry = {
+  roleLabel: string;
+  name: string;
+  email: string;
+  signedAt: Date;
+  ipAddress: string | null;
+  userAgent: string | null;
+  consentText: string;
+  signatureImageBytes: Uint8Array;
+};
+
+export type CertificateOptions = {
+  documentId: string;
+  documentTitle: string;
+  // Hash of the document's immediately-preceding version (documents.sha256Hash,
+  // already recorded by recordDocumentVersion) — shown so a viewer can verify
+  // integrity independently of the QR code. Never a hash of this call's own output.
+  sha256Hash: string | null;
+  // One entry per signer, rendered as one full-width card per signer, stacked —
+  // so a two-party document still ends up with exactly one certificate page,
+  // not two, and long fields never have to fight for half a page's width.
+  signers: SignerCertEntry[];
+};
+
+// Groups a hex digest into 8-character blocks so pdf-lib's word-wrap (which can
+// only break on whitespace) has somewhere to break — an unbroken 64-char hash
+// would otherwise run straight off the page edge.
+const formatHashForDisplay = (hash: string): string => hash.replace(/(.{8})/g, "$1 ").trim();
+
+// A raw user-agent string is 100+ characters of noise on a document meant to be
+// read, not parsed — reduce it to what a signer actually did ("Chrome · macOS").
+// The full string is still kept verbatim in signatures.userAgent for the audit log.
+const summarizeUserAgent = (userAgent: string): string => {
+  const browser = /Edg\//.test(userAgent)
+    ? "Edge"
+    : /OPR\//.test(userAgent)
+      ? "Opera"
+      : /Firefox\//.test(userAgent)
+        ? "Firefox"
+        : /Chrome\//.test(userAgent)
+          ? "Chrome"
+          : /Safari\//.test(userAgent)
+            ? "Safari"
+            : "Nieznana przeglądarka";
+
+  const os = /Windows/.test(userAgent)
+    ? "Windows"
+    : /Mac OS X/.test(userAgent)
+      ? "macOS"
+      : /Android/.test(userAgent)
+        ? "Android"
+        : /iPhone|iPad/.test(userAgent)
+          ? "iOS"
+          : /Linux/.test(userAgent)
+            ? "Linux"
+            : null;
+
+  return os ? `${browser} · ${os}` : browser;
+};
+
+const MUTED = rgb(0.45, 0.47, 0.52);
+const CARD_BORDER = rgb(0.15, 0.17, 0.22);
+const DARK_BAR = rgb(0.11, 0.15, 0.23);
+const DARK_BAR_TEXT = rgb(0.86, 0.89, 0.94);
+const SUMMARY_FILL = rgb(0.94, 0.96, 1);
+const SIGNATURE_BOX_FILL = rgb(0.98, 0.985, 0.99);
+
+const ROW_PADDING = 17;
+const RIGHT_COL_WIDTH = 150;
+
+/** One full-width signer card: name/role, contact + technical fields, consent text, and a boxed signature — closed off by a dark info bar carrying the IP and timestamp. Returns the y just below the card, for the next one to start at. */
+const drawSignerRow = (
+  page: PDFPage,
+  args: {
+    x: number;
+    width: number;
+    topY: number;
+    font: PDFFont;
+    boldFont: PDFFont;
+    signer: SignerCertEntry;
+    signatureImage: PDFImage;
+  },
+): number => {
+  const { x, width, font, boldFont, signer, signatureImage } = args;
+  const leftWidth = width - RIGHT_COL_WIDTH - ROW_PADDING * 3;
+  const leftX = x + ROW_PADDING;
+  const rightX = leftX + leftWidth + ROW_PADDING;
+
+  let ly = args.topY - ROW_PADDING - 11;
+  page.drawText(signer.name, { x: leftX, y: ly, size: 13.5, font: boldFont, color: COLORS.black });
+  ly -= 16;
+  page.drawText(signer.roleLabel, { x: leftX, y: ly, size: 9.5, font, color: COLORS.darkBlue });
+  ly -= 14;
+  page.drawLine({ start: { x: leftX, y: ly }, end: { x: leftX + leftWidth, y: ly }, thickness: 0.5, color: COLORS.lightGray });
+  ly -= 17;
+
+  const inlineField = (label: string, value: string) => {
+    page.drawText(label, { x: leftX, y: ly, size: 8, font: boldFont, color: MUTED });
+    const labelWidth = boldFont.widthOfTextAtSize(`${label} `, 8);
+    page.drawText(value, { x: leftX + labelWidth, y: ly, size: 9.5, font, color: COLORS.black });
+    ly -= 15;
+  };
+
+  inlineField("Email:", signer.email);
+  inlineField("Przeglądarka:", signer.userAgent ? summarizeUserAgent(signer.userAgent) : "—");
+
+  // Right column: the actual drawn signature, boxed like a seal.
+  page.drawText("PODPIS ELEKTRONICZNY", { x: rightX, y: args.topY - ROW_PADDING - 5, size: 6.5, font: boldFont, color: MUTED });
+  const sigDims = signatureImage.scaleToFit(Math.min(CERT_SIGNATURE_MAX_WIDTH, RIGHT_COL_WIDTH - 16), CERT_SIGNATURE_MAX_HEIGHT);
+  const sigBoxHeight = sigDims.height + 26;
+  const sigBoxY = args.topY - ROW_PADDING - 16 - sigBoxHeight;
+  page.drawRectangle({
+    x: rightX,
+    y: sigBoxY,
+    width: RIGHT_COL_WIDTH,
+    height: sigBoxHeight,
+    color: SIGNATURE_BOX_FILL,
+    borderColor: COLORS.lightGray,
+    borderWidth: 0.75,
+  });
+  page.drawImage(signatureImage, {
+    x: rightX + (RIGHT_COL_WIDTH - sigDims.width) / 2,
+    y: sigBoxY + (sigBoxHeight - sigDims.height) / 2,
+    width: sigDims.width,
+    height: sigDims.height,
+  });
+  page.drawLine({
+    start: { x: rightX - ROW_PADDING / 2, y: args.topY - 6 },
+    end: { x: rightX - ROW_PADDING / 2, y: Math.min(ly, sigBoxY) },
+    thickness: 0.5,
+    color: COLORS.lightGray,
+  });
+
+  // Consent text runs the full card width beneath both columns, not squeezed
+  // into the left column alone — the single biggest lever for keeping a
+  // two-signer certificate on one page.
+  let fy = Math.min(ly, sigBoxY) - 15;
+  page.drawText("PODSTAWA PRAWNA I ZGODA", { x: leftX, y: fy, size: 7, font: boldFont, color: MUTED });
+  fy -= 12;
+  for (const line of wrapText(signer.consentText, font, 8.5, width - ROW_PADDING * 2)) {
+    page.drawText(line, { x: leftX, y: fy, size: 8.5, font, color: rgb(0.35, 0.35, 0.4) });
+    fy -= 11.5;
+  }
+
+  const barY = fy - 14;
+  const BAR_HEIGHT = 21;
+  page.drawRectangle({ x, y: barY, width, height: BAR_HEIGHT, color: DARK_BAR });
+  page.drawText(`Adres IP: ${signer.ipAddress ?? "—"}`, {
+    x: x + ROW_PADDING,
+    y: barY + 6.5,
+    size: 8,
+    font,
+    color: DARK_BAR_TEXT,
+  });
+  const timestamp = signer.signedAt.toLocaleString("pl-PL", { dateStyle: "long", timeStyle: "medium" });
+  const timestampWidth = font.widthOfTextAtSize(timestamp, 8);
+  page.drawText(timestamp, {
+    x: x + width - ROW_PADDING - timestampWidth,
+    y: barY + 6.5,
+    size: 8,
+    font,
+    color: DARK_BAR_TEXT,
+  });
+
+  // Un-filled border wraps the whole card (including the dark bar), drawn last
+  // so the stroke sits cleanly on top without hiding anything beneath it.
+  page.drawRectangle({
+    x,
+    y: barY,
+    width,
+    height: args.topY - barY,
+    borderColor: CARD_BORDER,
+    borderWidth: 1,
+  });
+
+  return barY;
+};
+
+/**
+ * Appends exactly one certificate page with the legal audit trail (signer(s),
+ * timestamp, IP, consent text, document hash) for a document's final signed
+ * state. Call this once per document lifecycle — for two-party documents that
+ * means only on the second (completing) signature, with both signers passed in
+ * together, not once per signing step.
+ */
+export const appendCertificatePage = async (
+  pdfBytes: Uint8Array,
+  options: CertificateOptions,
+): Promise<Uint8Array> => {
+  const pdfDoc = await PDFDocument.load(pdfBytes);
+  const { regular: font, bold: boldFont } = await loadFonts(pdfDoc);
   const certPage = pdfDoc.addPage([PAGE_WIDTH, PAGE_HEIGHT]);
 
   const FRAME_X = MARGIN - 15;
@@ -113,80 +301,77 @@ export const applySignatureToDocument = async (
     borderColor: COLORS.lightGray,
     borderWidth: 1,
   });
-
-  let y = PAGE_HEIGHT - 75;
-
-  certPage.drawText("CERTYFIKAT PODPISU ELEKTRONICZNEGO", {
-    x: MARGIN,
-    y,
-    size: 15,
-    font: boldFont,
+  // A plain accent band across the top of the frame — the one flourish that
+  // reads "this is a certificate, not just another page" at a glance.
+  certPage.drawRectangle({
+    x: FRAME_X,
+    y: FRAME_Y + FRAME_HEIGHT - 5,
+    width: FRAME_WIDTH,
+    height: 5,
     color: COLORS.darkBlue,
   });
+
+  let y = PAGE_HEIGHT - 78;
+
+  certPage.drawText("CERTYFIKAT PODPISU ELEKTRONICZNEGO", { x: MARGIN, y, size: 17, font: boldFont, color: COLORS.darkBlue });
   y -= 15;
-  certPage.drawText("Electronic Signature Certificate", { x: MARGIN, y, size: 8, font, color: COLORS.gray });
-  y -= 12;
+  certPage.drawText("Poświadczenie złożenia podpisu elektronicznego · Electronic Signature Certificate", {
+    x: MARGIN,
+    y,
+    size: 8,
+    font,
+    color: MUTED,
+  });
+  y -= 13;
+  certPage.drawText(`ID dokumentu: ${options.documentId}`, { x: MARGIN, y, size: 7.5, font, color: MUTED });
+  y -= 14;
   certPage.drawLine({ start: { x: MARGIN, y }, end: { x: PAGE_WIDTH - MARGIN, y }, thickness: 0.75, color: COLORS.lightGray });
-  y -= 24;
+  y -= 20;
 
-  const sectionHeader = (label: string) => {
-    certPage.drawText(label, { x: MARGIN, y, size: 10, font: boldFont, color: COLORS.darkBlue });
-    y -= 16;
-  };
+  // Document summary card — title + integrity hash, framed the same way as the
+  // signer cards below so the whole certificate reads as one connected system.
+  const summaryPadding = 13;
+  const partiesLabel = options.signers.length === 2 ? "obie strony" : "podpisującego";
+  const summaryLines = wrapText(
+    `Dokument „${options.documentTitle}” został podpisany elektronicznie przez ${partiesLabel} i zabezpieczony sumą kontrolną poniżej — każda zmiana treści dokumentu zmienia tę sumę.`,
+    font,
+    9.5,
+    CONTENT_WIDTH - summaryPadding * 2 - 4,
+  );
+  const hashDisplay = options.sha256Hash ? formatHashForDisplay(options.sha256Hash) : null;
+  const summaryHeight = summaryPadding * 2 + summaryLines.length * 13 + (hashDisplay ? 23 : 0);
+  const summaryY = y - summaryHeight;
 
-  const field = (label: string, value: string) => {
-    certPage.drawText(label, { x: MARGIN, y, size: 9, font: boldFont, color: COLORS.black });
-    const labelWidth = boldFont.widthOfTextAtSize(`${label} `, 9);
-    for (const line of wrapText(value, font, 9, CONTENT_WIDTH - labelWidth)) {
-      certPage.drawText(line, { x: MARGIN + labelWidth, y, size: 9, font, color: COLORS.black });
-      y -= 13;
-    }
-  };
-
-  sectionHeader("Dokument / Document");
-  field("Tytuł:", options.documentTitle);
-  y -= 8;
-
-  sectionHeader("Osoba podpisująca / Signatory");
-  field("Imię i nazwisko:", options.signerName);
-  field("Rola:", options.signerLabel);
-  y -= 8;
-
-  sectionHeader("Dane techniczne podpisu / Signature technical data");
-  field("Data i godzina:", `${options.signedAt.toLocaleString("pl-PL", { dateStyle: "long", timeStyle: "medium" })} (czas lokalny)`);
-  if (options.ipAddress) {
-    field("Adres IP:", options.ipAddress);
-  }
-  if (options.userAgent) {
-    field("Przeglądarka:", options.userAgent);
-  }
-  y -= 8;
-
-  sectionHeader("Podstawa prawna i zgoda / Legal basis & consent");
-  for (const line of wrapText(options.consentText, font, 9, CONTENT_WIDTH)) {
-    certPage.drawText(line, { x: MARGIN, y, size: 9, font, color: rgb(0.3, 0.3, 0.3) });
-    y -= 13;
-  }
-  y -= 12;
-
-  certPage.drawText("Podpis / Signature:", { x: MARGIN, y, size: 9, font: boldFont, color: COLORS.black });
-  y -= 10;
-
-  const certDims = signatureImage.scaleToFit(CERT_SIGNATURE_MAX_WIDTH, CERT_SIGNATURE_MAX_HEIGHT);
   certPage.drawRectangle({
     x: MARGIN,
-    y: y - certDims.height - 8,
-    width: certDims.width + 16,
-    height: certDims.height + 16,
-    borderColor: COLORS.lightGray,
+    y: summaryY,
+    width: CONTENT_WIDTH,
+    height: summaryHeight,
+    color: SUMMARY_FILL,
+    borderColor: COLORS.darkBlue,
     borderWidth: 0.75,
   });
-  certPage.drawImage(signatureImage, {
-    x: MARGIN + 8,
-    y: y - certDims.height,
-    width: certDims.width,
-    height: certDims.height,
-  });
+  certPage.drawRectangle({ x: MARGIN, y: summaryY, width: 3, height: summaryHeight, color: COLORS.darkBlue });
+
+  let sy = y - summaryPadding - 8;
+  for (const line of summaryLines) {
+    certPage.drawText(line, { x: MARGIN + summaryPadding + 4, y: sy, size: 9.5, font, color: rgb(0.13, 0.16, 0.22) });
+    sy -= 13;
+  }
+  if (hashDisplay) {
+    sy -= 1;
+    certPage.drawText("SUMA KONTROLNA DOKUMENTU (SHA-256)", { x: MARGIN + summaryPadding + 4, y: sy, size: 6.5, font: boldFont, color: MUTED });
+    sy -= 11;
+    certPage.drawText(hashDisplay, { x: MARGIN + summaryPadding + 4, y: sy, size: 8, font, color: rgb(0.13, 0.16, 0.22) });
+  }
+
+  y = summaryY - 22;
+
+  for (const signer of options.signers) {
+    const signatureImage = await pdfDoc.embedPng(signer.signatureImageBytes);
+    y = drawSignerRow(certPage, { x: MARGIN, width: CONTENT_WIDTH, topY: y, font, boldFont, signer, signatureImage });
+    y -= 18;
+  }
 
   // Pinned near the bottom of the frame (not immediately following the content above),
   // so the certificate reads like a fixed template regardless of how long the fields above are.
@@ -203,4 +388,48 @@ export const applySignatureToDocument = async (
   }
 
   return pdfDoc.save();
+};
+
+export type ApplySignatureOptions = ApplySignatureMarksOptions & {
+  documentId: string;
+  signerLabel: string;
+  signerName: string;
+  signerEmail: string;
+  consentText: string;
+  signedAt: Date;
+  ipAddress: string | null;
+  userAgent: string | null;
+  documentTitle: string;
+  sha256Hash: string | null;
+};
+
+/**
+ * Applies one party's signature and its certificate page in a single call — the
+ * common path for single-signer documents ("employee"-only or "employer"-only).
+ * Two-party documents instead call `applySignatureMarks` on the first signature
+ * and `appendCertificatePage` (with both signers) on the second, so they end up
+ * with one shared certificate page rather than one per signer.
+ */
+export const applySignatureToDocument = async (
+  pdfBytes: Uint8Array,
+  options: ApplySignatureOptions,
+): Promise<Uint8Array> => {
+  const marked = await applySignatureMarks(pdfBytes, options);
+  return appendCertificatePage(marked, {
+    documentId: options.documentId,
+    documentTitle: options.documentTitle,
+    sha256Hash: options.sha256Hash,
+    signers: [
+      {
+        roleLabel: options.signerLabel,
+        name: options.signerName,
+        email: options.signerEmail,
+        signedAt: options.signedAt,
+        ipAddress: options.ipAddress,
+        userAgent: options.userAgent,
+        consentText: options.consentText,
+        signatureImageBytes: dataUrlToBytes(options.signatureDataUrl),
+      },
+    ],
+  });
 };

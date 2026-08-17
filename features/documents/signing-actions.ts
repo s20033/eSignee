@@ -1,22 +1,23 @@
 "use server";
 
 /**
- * Public, token-authenticated actions for the no-login employee signing flow
- * (PROJECT.md: "Employee: receive secure link... No login required").
- * Deliberately kept separate from actions.ts, which requires an authenticated
- * employer session — nothing here should call getCurrentProfile().
+ * Public, token-authenticated actions for the no-login signing flow (PROJECT.md:
+ * "Employee: receive secure link... No login required" — also used by external
+ * signees, see features/signees). Deliberately kept separate from actions.ts,
+ * which requires an authenticated employer session — nothing here should call
+ * getCurrentProfile().
  *
  * A signing token identifies a "session": every document generated in one
- * batch that needs an employee signature shares the same token, so these
- * actions always operate on the *list* of documents behind a token, even
+ * batch that needs the counterparty's signature shares the same token, so
+ * these actions always operate on the *list* of documents behind a token, even
  * when that list has exactly one entry (e.g. a Contract Builder annex).
  */
 import { headers } from "next/headers";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { documents, employees, profiles, signatures } from "@/drizzle/schema";
+import { documents, employees, profiles, signatures, signees } from "@/drizzle/schema";
 import { createServiceClient } from "@/lib/supabase/service";
-import { applySignatureToDocument } from "@/lib/pdf/apply-signature";
+import { applySignatureMarks, applySignatureToDocument } from "@/lib/pdf/apply-signature";
 import { embedVerificationQr } from "@/lib/pdf/embed-verification-qr";
 import type { SignatureBlockLayout } from "@/lib/pdf/chrome";
 import { getAppOrigin } from "@/lib/get-app-origin";
@@ -24,20 +25,23 @@ import { sendEmail } from "@/lib/email/send";
 import { documentCompletedEmail, employerSignatureNeededEmail } from "@/lib/email/templates";
 import { logAuditEvent } from "@/lib/audit/log";
 import { recordDocumentVersion } from "@/lib/documents/document-service";
+import { resolveDocumentParty } from "@/lib/documents/resolve-party";
+import { counterpartyConsentText } from "@/lib/documents/consent-text";
 
 const DOCUMENTS_BUCKET = "documents";
 const SIGNATURES_BUCKET = "signatures";
 
-/** Every document sharing this token, still waiting on the employee's signature. */
+/** Every document sharing this token, still waiting on the counterparty's signature. */
 export const getSigningSession = async (token: string) => {
   const rows = await db
     .select({
       document: documents,
-      employeeName: employees.fullName,
+      partyName: sql<string>`coalesce(${employees.fullName}, ${signees.fullName})`,
       companyName: profiles.companyName,
     })
     .from(documents)
-    .innerJoin(employees, eq(documents.employeeId, employees.id))
+    .leftJoin(employees, eq(documents.employeeId, employees.id))
+    .leftJoin(signees, eq(documents.signeeId, signees.id))
     .innerJoin(profiles, eq(documents.employerId, profiles.id))
     .where(
       and(
@@ -51,7 +55,7 @@ export const getSigningSession = async (token: string) => {
   return rows;
 };
 
-/** Logs a single "viewed" event when the employee opens their signing link. */
+/** Logs a single "viewed" event when the signee opens their signing link. */
 export const logDocumentViewed = async (documentId: string) => {
   await logAuditEvent({ action: "document.viewed", actorEmail: null, documentId });
 };
@@ -74,7 +78,7 @@ export const getSigningSessionPreviewUrls = async (token: string) => {
 
 export type SubmitSignatureResult = { success: true } | { success: false; error: string };
 
-/** Applies one drawn signature to every document in the session — the employee signs once for the whole batch. */
+/** Applies one drawn signature to every document in the session — the signee signs once for the whole batch. */
 export const submitEmployeeSignature = async (
   token: string,
   signatureDataUrl: string,
@@ -93,8 +97,10 @@ export const submitEmployeeSignature = async (
   }
 
   const supabase = createServiceClient();
-  const { employeeId, employerId } = session[0].document;
-  const [employee] = await db.select().from(employees).where(eq(employees.id, employeeId)).limit(1);
+  const { employeeId, signeeId, employerId } = session[0].document;
+  // documents_party_check guarantees exactly one of these is set.
+  const partyId = employeeId ?? signeeId;
+  const party = await resolveDocumentParty({ employeeId, signeeId });
 
   const headerList = await headers();
   const ipAddress = headerList.get("x-forwarded-for");
@@ -102,7 +108,7 @@ export const submitEmployeeSignature = async (
   const signedAt = new Date();
   const origin = await getAppOrigin();
 
-  const signatureImagePath = `${employerId}/${employeeId}/${token}-employee.png`;
+  const signatureImagePath = `${employerId}/${partyId}/${token}-employee.png`;
   const signatureBase64 = signatureDataUrl.split(",")[1] ?? "";
   await supabase.storage
     .from(SIGNATURES_BUCKET)
@@ -110,10 +116,10 @@ export const submitEmployeeSignature = async (
 
   const companyName = session[0].companyName;
 
-  for (const { document, employeeName } of session) {
+  for (const { document, partyName } of session) {
     await logAuditEvent({
       action: "document.consent_accepted",
-      actorEmail: employee?.email ?? null,
+      actorEmail: party?.email ?? null,
       documentId: document.id,
     });
 
@@ -125,33 +131,46 @@ export const submitEmployeeSignature = async (
       return { success: false, error: `Could not load "${document.title}" to sign.` };
     }
 
-    const signedPdfBytes = await applySignatureToDocument(new Uint8Array(await pdfData.arrayBuffer()), {
-      role: "employee",
-      layout: document.signatureLayout as SignatureBlockLayout | null,
-      signerLabel: "Pracownik / Zleceniobiorca",
-      signerName: employeeName,
-      signatureDataUrl,
-      consentText: `Osoba podpisująca oświadcza, że zapoznała się z treścią niniejszego dokumentu i wyraża zgodę na złożenie podpisu elektronicznego (art. 6 ust. 1 lit. a RODO). Administratorem danych osobowych zawartych w dokumencie jest ${companyName}, który przetwarza dane w celu zawarcia i wykonania umowy (art. 6 ust. 1 lit. b RODO). Osobie podpisującej przysługuje prawo dostępu do danych, ich sprostowania, ograniczenia przetwarzania oraz wniesienia skargi do Prezesa Urzędu Ochrony Danych Osobowych.`,
-      signedAt,
-      ipAddress,
-      userAgent,
-      documentTitle: document.title,
-    });
-
+    const pdfBytes = new Uint8Array(await pdfData.arrayBuffer());
     const isTwoParty = document.signatureType === "two-party";
-    const finalPath = `${document.employerId}/${document.employeeId}/${document.bundleId}/${document.kind ?? document.id}-employee-signed.pdf`;
 
-    const pdfToStore = isTwoParty
-      ? signedPdfBytes
-      : await embedVerificationQr(signedPdfBytes, `${origin}/verify/${document.id}`);
+    let signedPdfBytes: Uint8Array;
+    if (isTwoParty) {
+      // The employer/sender signs second and appends the (single, combined)
+      // certificate page then — see signAsEmployer. No QR yet either.
+      signedPdfBytes = await applySignatureMarks(pdfBytes, {
+        role: "employee",
+        layout: document.signatureLayout as SignatureBlockLayout | null,
+        signatureDataUrl,
+      });
+    } else {
+      const withCert = await applySignatureToDocument(pdfBytes, {
+        role: "employee",
+        layout: document.signatureLayout as SignatureBlockLayout | null,
+        documentId: document.id,
+        signerLabel: document.counterpartyRoleLabel ?? "Pracownik / Zleceniobiorca",
+        signerName: partyName,
+        signerEmail: party?.email ?? "unknown",
+        signatureDataUrl,
+        consentText: counterpartyConsentText(companyName),
+        signedAt,
+        ipAddress,
+        userAgent,
+        documentTitle: document.title,
+        sha256Hash: document.sha256Hash,
+      });
+      signedPdfBytes = await embedVerificationQr(withCert, `${origin}/verify/${document.id}`);
+    }
+
+    const finalPath = `${document.employerId}/${partyId}/${document.bundleId}/${document.kind ?? document.id}-employee-signed.pdf`;
 
     await supabase.storage
       .from(DOCUMENTS_BUCKET)
-      .upload(finalPath, Buffer.from(pdfToStore), { contentType: "application/pdf" });
+      .upload(finalPath, Buffer.from(signedPdfBytes), { contentType: "application/pdf" });
 
     await db.insert(signatures).values({
       documentId: document.id,
-      signerEmail: employee?.email ?? "unknown",
+      signerEmail: party?.email ?? "unknown",
       imageUrl: signatureImagePath,
       ipAddress,
       userAgent,
@@ -170,24 +189,24 @@ export const submitEmployeeSignature = async (
 
     await logAuditEvent({
       action: "document.signed_by_employee",
-      actorEmail: employee?.email ?? null,
+      actorEmail: party?.email ?? null,
       documentId: document.id,
       metadata: { ipAddress },
     });
     if (!isTwoParty) {
       await logAuditEvent({
         action: "document.completed",
-        actorEmail: employee?.email ?? null,
+        actorEmail: party?.email ?? null,
         documentId: document.id,
       });
     }
 
     await recordDocumentVersion({
       documentId: document.id,
-      pdfBytes: pdfToStore,
+      pdfBytes: signedPdfBytes,
       pdfUrl: finalPath,
       note: isTwoParty ? "Employee signed" : "Employee signed — completed",
-      actorEmail: employee?.email ?? null,
+      actorEmail: party?.email ?? null,
     });
 
     if (isTwoParty) {
@@ -199,16 +218,16 @@ export const submitEmployeeSignature = async (
           subject: `${document.title}: ready for your signature`,
           html: employerSignatureNeededEmail({
             documentTitle: document.title,
-            employeeName,
+            employeeName: partyName,
             dashboardUrl: `${origin}/dashboard/documents/${document.id}`,
           }),
         });
       }
-    } else if (employee?.email) {
+    } else if (party?.email) {
       await sendEmail({
-        to: employee.email,
+        to: party.email,
         subject: `${document.title} — completed`,
-        html: documentCompletedEmail({ documentTitle: document.title, recipientName: employee.fullName }),
+        html: documentCompletedEmail({ documentTitle: document.title, recipientName: partyName }),
       });
     }
   }

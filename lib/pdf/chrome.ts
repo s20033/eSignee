@@ -138,11 +138,13 @@ const SIGNATURE_IMAGE_MAX_HEIGHT = 32;
  * step can place the real signature image (and, for the employer, the company stamp)
  * in the same spot rather than on a separate page.
  */
+export type RoleLabels = { sender: string; counterparty: string };
+
 export const drawSignatureBlock = (
   pdfDoc: PDFDocument,
   cursor: ReturnType<typeof createCursor>,
   signature: SignatureType,
-  meta: { employer: EmployerData; employeeName: string; signDate: string },
+  meta: { employer: EmployerData; employeeName: string; signDate: string; roleLabels?: RoleLabels | null },
   fonts: Fonts,
 ): SignatureBlockLayout | null => {
   if (!signature) return null;
@@ -191,16 +193,19 @@ export const drawSignatureBlock = (
     ? `${meta.employer.name} — ${meta.employer.signatoryName}${meta.employer.signatoryTitle ? `, ${meta.employer.signatoryTitle}` : ""}`
     : meta.employer.name;
 
+  const senderLabel = `${meta.roleLabels?.sender ?? "Pracodawca / Zleceniodawca"}:`;
+  const counterpartyLabel = `${meta.roleLabels?.counterparty ?? "Pracownik / Zleceniobiorca"}:`;
+
   if (signature === "two-party") {
-    const employerCol = drawColumn(MARGIN, "Pracodawca / Zleceniodawca:", employerSignatoryLabel, true);
-    const employeeCol = drawColumn(MARGIN + colWidth + 20, "Pracownik / Zleceniobiorca:", meta.employeeName, false);
+    const employerCol = drawColumn(MARGIN, senderLabel, employerSignatoryLabel, true);
+    const employeeCol = drawColumn(MARGIN + colWidth + 20, counterpartyLabel, meta.employeeName, false);
     employer = { ...employerCol.rect, stamp: employerCol.stamp! };
     employee = employeeCol.rect;
   } else if (signature === "employer") {
-    const employerCol = drawColumn(MARGIN, "Pracodawca / Zleceniodawca:", employerSignatoryLabel, true);
+    const employerCol = drawColumn(MARGIN, senderLabel, employerSignatoryLabel, true);
     employer = { ...employerCol.rect, stamp: employerCol.stamp! };
   } else {
-    const employeeCol = drawColumn(MARGIN, "Pracownik / Zleceniobiorca:", meta.employeeName, false);
+    const employeeCol = drawColumn(MARGIN, counterpartyLabel, meta.employeeName, false);
     employee = employeeCol.rect;
   }
 

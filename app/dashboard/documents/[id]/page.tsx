@@ -12,6 +12,7 @@ import { DownloadDocumentButton } from "@/features/documents/components/download
 import { DocumentDeleteRestoreButton } from "@/features/documents/components/document-delete-restore-button";
 import { DocumentCategoryEditor } from "@/features/documents/components/document-category-editor";
 import { ResendSigningEmailButton } from "@/features/documents/components/resend-signing-email-button";
+import { SignAsEmployerDialog } from "@/features/documents/components/sign-as-employer-dialog";
 import { DocumentTimeline } from "@/features/documents/components/document-timeline";
 import { DocumentVersions } from "@/features/documents/components/document-versions";
 import { DocumentAuditReport } from "@/features/documents/components/document-audit-report";
@@ -25,6 +26,13 @@ const hasPendingSignature = (status: string, signatureType: string | null) =>
   status === "employee_signed" ||
   (status === "draft" && signatureType === "employer");
 
+// Mirrors signAsEmployer's own canSignNow check (features/documents/actions.ts) —
+// same condition document-bundle-list.tsx uses for the employee-scoped page's
+// "Sign" button, duplicated here because this is the only detail page a
+// signee-based document (no employee sub-route) is ever reachable from.
+const canSignAsEmployer = (status: string, signatureType: string | null) =>
+  (signatureType === "employer" && status === "draft") || (signatureType === "two-party" && status === "employee_signed");
+
 const DocumentDetailPage = async ({ params }: DocumentDetailPageProps) => {
   const { id } = await params;
   const detail = await getDocumentDetail(id);
@@ -33,7 +41,7 @@ const DocumentDetailPage = async ({ params }: DocumentDetailPageProps) => {
     notFound();
   }
 
-  const { document, employeeName, versions, timeline, verificationCount } = detail;
+  const { document, partyName, versions, timeline, verificationCount } = detail;
   const signatureRows = await getDocumentSignatures(id);
 
   const origin = await getAppOrigin();
@@ -55,10 +63,16 @@ const DocumentDetailPage = async ({ params }: DocumentDetailPageProps) => {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">{document.title}</h1>
           <p className="text-sm text-muted-foreground">
-            Employee:{" "}
-            <Link href={`/dashboard/employees/${document.employeeId}/documents`} className="text-foreground hover:underline">
-              {employeeName}
-            </Link>
+            {document.employeeId ? (
+              <>
+                Employee:{" "}
+                <Link href={`/dashboard/employees/${document.employeeId}/documents`} className="text-foreground hover:underline">
+                  {partyName}
+                </Link>
+              </>
+            ) : (
+              <>Signee: {partyName}</>
+            )}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline">{DOCUMENT_STATUS_LABELS[document.status]}</Badge>
@@ -76,6 +90,9 @@ const DocumentDetailPage = async ({ params }: DocumentDetailPageProps) => {
           <DownloadDocumentButton documentId={document.id} />
           {!document.deletedAt && hasPendingSignature(document.status, document.signatureType) && (
             <ResendSigningEmailButton documentId={document.id} />
+          )}
+          {!document.deletedAt && canSignAsEmployer(document.status, document.signatureType) && (
+            <SignAsEmployerDialog documentId={document.id} />
           )}
           <DocumentDeleteRestoreButton documentId={document.id} deleted={!!document.deletedAt} />
         </div>

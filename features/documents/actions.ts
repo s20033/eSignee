@@ -3,17 +3,17 @@
 import { randomUUID } from "node:crypto";
 import { headers } from "next/headers";
 import { revalidatePath } from "next/cache";
-import { and, count, desc, eq, ilike, inArray, isNull, or } from "drizzle-orm";
+import { and, count, desc, eq, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import { db } from "@/lib/db";
-import { auditLogs, documents, documentVersions, employees, signatures, tenantDocumentSettings } from "@/drizzle/schema";
+import { auditLogs, documents, documentVersions, employees, signatures, signees, tenantDocumentSettings } from "@/drizzle/schema";
 import { requireTenantAdmin } from "@/lib/auth/get-current-profile";
 import { getCurrentTenant } from "@/lib/auth/get-current-tenant";
 import { createClient } from "@/lib/supabase/server";
 import { generateDocumentBundle } from "@/lib/documents/generate-bundle";
 import { renderDocumentToPdf } from "@/lib/pdf/render";
-import { applySignatureToDocument } from "@/lib/pdf/apply-signature";
+import { applySignatureMarks, appendCertificatePage, dataUrlToBytes, type SignerCertEntry } from "@/lib/pdf/apply-signature";
 import { embedVerificationQr } from "@/lib/pdf/embed-verification-qr";
-import type { SignatureBlockLayout } from "@/lib/pdf/chrome";
+import type { RoleLabels, SignatureBlockLayout } from "@/lib/pdf/chrome";
 import { getJobPositionById } from "@/lib/legal/job-positions";
 import { FOREIGNER_DOCUMENT_LABELS } from "@/lib/legal/constants";
 import { getAppOrigin } from "@/lib/get-app-origin";
@@ -21,13 +21,20 @@ import { sendEmail } from "@/lib/email/send";
 import { documentCompletedEmail, employerSignatureNeededEmail, signingInvitationEmail } from "@/lib/email/templates";
 import { logAuditEvent, listDocumentTimeline, countDocumentVerifications } from "@/lib/audit/log";
 import { recordDocumentVersion, listDocumentVersions } from "@/lib/documents/document-service";
+import { resolveDocumentParty } from "@/lib/documents/resolve-party";
+import { counterpartyConsentText, employerConsentText } from "@/lib/documents/consent-text";
 import type { BundleInput, EmployerData, SignatureType } from "@/lib/documents/types";
 import type { DocumentCategory } from "@/lib/documents/category-labels";
 import type { Document } from "@/types/document";
 import { templates } from "@/drizzle/schema";
 import { renderTemplateDocumentToPdf } from "@/lib/pdf/render-template";
 import { extractPlaceholders, substitutePlaceholders } from "@/features/templates/schema";
-import { contractBuilderSchema, type ContractBuilderValues, generateFromTemplatesSchema } from "./schema";
+import {
+  contractBuilderSchema,
+  type ContractBuilderValues,
+  generateFromTemplatesSchema,
+  generateFromTemplatesForSigneeSchema,
+} from "./schema";
 
 const DOCUMENTS_BUCKET = "documents";
 const SIGNATURES_BUCKET = "signatures";
@@ -44,11 +51,18 @@ const getSignatoryFields = async (tenantId: string) => {
 
 export type GenerateBundleResult = { success: true; bundleId: string } | { success: false; error: string };
 
+// Exactly one of the two — mirrors documents_party_check. Employee documents (the
+// Contract Builder / Template flows scoped to an employee) vs. an external signee.
+type DocumentPartyInput = { kind: "employee"; employeeId: string } | { kind: "signee"; signeeId: string };
+
 type PersistDocumentInput = {
   profileId: string;
   tenantId: string;
   actorEmail: string;
-  employeeId: string;
+  party: DocumentPartyInput;
+  // Only set for signee-based documents; null/omitted for employee documents,
+  // which keep the in-document/certificate hardcoded Polish label fallbacks.
+  roleLabels?: RoleLabels | null;
   bundleId: string;
   documentId: string;
   title: string;
@@ -73,7 +87,7 @@ type PersistDocumentResult =
   | { success: true; documentId: string; signingLink: { title: string; token: string } | null }
   | { success: false; error: string };
 
-/** Shared by generateContractBundle and generateDocumentsFromTemplates: uploads the rendered PDF, inserts the documents row, and logs the audit event. */
+/** Shared by generateContractBundle, generateDocumentsFromTemplates, and generateDocumentsForSignee: uploads the rendered PDF, inserts the documents row, and logs the audit event. */
 const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<PersistDocumentResult> => {
   const supabase = await createClient();
   let pdfBytes = input.pdfBytes;
@@ -83,7 +97,8 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
     pdfBytes = await embedVerificationQr(pdfBytes, `${input.origin}/verify/${input.documentId}`);
   }
 
-  const storagePath = `${input.profileId}/${input.employeeId}/${input.bundleId}/${input.documentId}.pdf`;
+  const partyId = input.party.kind === "employee" ? input.party.employeeId : input.party.signeeId;
+  const storagePath = `${input.profileId}/${partyId}/${input.bundleId}/${input.documentId}.pdf`;
   const { error: uploadError } = await supabase.storage
     .from(DOCUMENTS_BUCKET)
     .upload(storagePath, Buffer.from(pdfBytes), { contentType: "application/pdf" });
@@ -101,7 +116,10 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
       id: input.documentId,
       employerId: input.profileId,
       tenantId: input.tenantId,
-      employeeId: input.employeeId,
+      employeeId: input.party.kind === "employee" ? input.party.employeeId : null,
+      signeeId: input.party.kind === "signee" ? input.party.signeeId : null,
+      senderRoleLabel: input.roleLabels?.sender ?? null,
+      counterpartyRoleLabel: input.roleLabels?.counterparty ?? null,
       templateId: input.templateId,
       title: input.title,
       kind: input.kind,
@@ -138,6 +156,35 @@ const persistGeneratedDocument = async (input: PersistDocumentInput): Promise<Pe
     documentId: createdDocument.id,
     signingLink: signingToken ? { title: input.title, token: signingToken } : null,
   };
+};
+
+type LoadValidatedTemplatesResult =
+  | { templates: (typeof templates.$inferSelect)[] }
+  | { error: string };
+
+/** Shared by generateDocumentsFromTemplates and generateDocumentsForSignee: loads the selected templates (scoped to the employer) and checks every placeholder they use has a value. */
+const loadValidatedTemplates = async (
+  templateIds: string[],
+  employerId: string,
+  values: Record<string, string>,
+): Promise<LoadValidatedTemplatesResult> => {
+  const selectedTemplates = await db
+    .select()
+    .from(templates)
+    .where(and(inArray(templates.id, templateIds), eq(templates.employerId, employerId), isNull(templates.deletedAt)));
+
+  if (selectedTemplates.length !== templateIds.length) {
+    return { error: "One or more selected templates could not be found." };
+  }
+
+  for (const template of selectedTemplates) {
+    const missing = extractPlaceholders(template.content).filter((name) => !values[name]?.trim());
+    if (missing.length > 0) {
+      return { error: `Missing value for {{${missing[0]}}} (used in "${template.name}")` };
+    }
+  }
+
+  return { templates: selectedTemplates };
 };
 
 const toBundleInput = (
@@ -255,7 +302,7 @@ export const generateContractBundle = async (
       profileId: profile.id,
       tenantId: tenant.id,
       actorEmail: profile.email,
-      employeeId,
+      party: { kind: "employee", employeeId },
       bundleId,
       documentId: randomUUID(),
       title: doc.title,
@@ -329,26 +376,9 @@ export const generateDocumentsFromTemplates = async (
 
   const signatory = await getSignatoryFields(tenant.id);
 
-  const selectedTemplates = await db
-    .select()
-    .from(templates)
-    .where(
-      and(
-        inArray(templates.id, parsed.data.templateIds),
-        eq(templates.employerId, profile.id),
-        isNull(templates.deletedAt),
-      ),
-    );
-
-  if (selectedTemplates.length !== parsed.data.templateIds.length) {
-    return { success: false, error: "One or more selected templates could not be found." };
-  }
-
-  for (const template of selectedTemplates) {
-    const missing = extractPlaceholders(template.content).filter((name) => !parsed.data.values[name]?.trim());
-    if (missing.length > 0) {
-      return { success: false, error: `Missing value for {{${missing[0]}}} (used in "${template.name}")` };
-    }
+  const loaded = await loadValidatedTemplates(parsed.data.templateIds, profile.id, parsed.data.values);
+  if ("error" in loaded) {
+    return { success: false, error: loaded.error };
   }
 
   const bundleId = randomUUID();
@@ -357,7 +387,7 @@ export const generateDocumentsFromTemplates = async (
   const sessionToken = needsEmployeeSignature ? randomUUID() : null;
   const pendingDocuments: { documentId: string; title: string }[] = [];
 
-  for (const template of selectedTemplates) {
+  for (const template of loaded.templates) {
     const body = substitutePlaceholders(template.content, parsed.data.values);
     const { bytes: pdfBytes, signatureLayout } = await renderTemplateDocumentToPdf(
       template.name,
@@ -382,7 +412,7 @@ export const generateDocumentsFromTemplates = async (
       profileId: profile.id,
       tenantId: tenant.id,
       actorEmail: profile.email,
-      employeeId,
+      party: { kind: "employee", employeeId },
       bundleId,
       documentId: randomUUID(),
       title: template.name,
@@ -430,6 +460,127 @@ export const generateDocumentsFromTemplates = async (
   return { success: true, bundleId };
 };
 
+/**
+ * Fills one or more employer-authored {{placeholder}} templates for an external
+ * signee (not an employee) — the counterpart to generateDocumentsFromTemplates.
+ * Kept as a separate action rather than branching the employee one so the
+ * employee flow's call sites and generated bytes are entirely unaffected.
+ */
+export const generateDocumentsForSignee = async (
+  signeeId: string,
+  values: unknown,
+): Promise<GenerateBundleResult> => {
+  const profile = await requireTenantAdmin();
+  const parsed = generateFromTemplatesForSigneeSchema.safeParse(values);
+
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const [signee, tenant] = await Promise.all([
+    db
+      .select()
+      .from(signees)
+      .where(and(eq(signees.id, signeeId), eq(signees.employerId, profile.id), isNull(signees.deletedAt)))
+      .limit(1)
+      .then(([row]) => row),
+    getCurrentTenant(),
+  ]);
+
+  if (!signee) {
+    return { success: false, error: "Signee not found" };
+  }
+
+  const signatory = await getSignatoryFields(tenant.id);
+
+  const loaded = await loadValidatedTemplates(parsed.data.templateIds, profile.id, parsed.data.values);
+  if ("error" in loaded) {
+    return { success: false, error: loaded.error };
+  }
+
+  const bundleId = randomUUID();
+  const origin = await getAppOrigin();
+  const needsSigneeSignature = parsed.data.signatureType === "employee" || parsed.data.signatureType === "two-party";
+  const sessionToken = needsSigneeSignature ? randomUUID() : null;
+  const pendingDocuments: { documentId: string; title: string }[] = [];
+  const roleLabels: RoleLabels = { sender: parsed.data.senderRoleLabel, counterparty: parsed.data.counterpartyRoleLabel };
+  const partyDisplayName = signee.companyName ? `${signee.fullName} — ${signee.companyName}` : signee.fullName;
+
+  for (const template of loaded.templates) {
+    const body = substitutePlaceholders(template.content, parsed.data.values);
+    const { bytes: pdfBytes, signatureLayout } = await renderTemplateDocumentToPdf(
+      template.name,
+      body,
+      {
+        name: profile.companyName,
+        address: profile.address,
+        taxId: profile.taxId,
+        regon: profile.regon,
+        krs: profile.krs,
+        signingPlace: tenant.defaultSigningPlace,
+        ...signatory,
+      },
+      {
+        employeeName: partyDisplayName,
+        signDate: new Date().toLocaleDateString("pl-PL"),
+        signatureType: parsed.data.signatureType,
+        roleLabels,
+      },
+    );
+
+    const result = await persistGeneratedDocument({
+      profileId: profile.id,
+      tenantId: tenant.id,
+      actorEmail: profile.email,
+      party: { kind: "signee", signeeId },
+      roleLabels,
+      bundleId,
+      documentId: randomUUID(),
+      title: template.name,
+      kind: null,
+      templateId: template.id,
+      signatureType: parsed.data.signatureType,
+      signatureLayout,
+      expiresAt: null,
+      pdfBytes,
+      origin,
+      signingToken: sessionToken,
+      category: template.category,
+      customCategoryLabel: template.customCategoryLabel,
+    });
+
+    if (!result.success) {
+      return result;
+    }
+    if (result.signingLink) {
+      pendingDocuments.push({ documentId: result.documentId, title: result.signingLink.title });
+    }
+  }
+
+  if (sessionToken && pendingDocuments.length > 0 && signee.email) {
+    await sendEmail({
+      to: signee.email,
+      subject: `${profile.companyName}: documents to sign`,
+      html: signingInvitationEmail({
+        employeeName: partyDisplayName,
+        companyName: profile.companyName,
+        documents: pendingDocuments.map(({ title }) => ({ title, signingUrl: `${origin}/sign/${sessionToken}` })),
+      }),
+    });
+    for (const { documentId } of pendingDocuments) {
+      await logAuditEvent({
+        action: "document.sent",
+        actorEmail: profile.email,
+        documentId,
+        metadata: { to: signee.email, bundleId, sessionDocumentCount: pendingDocuments.length },
+      });
+    }
+  }
+
+  revalidatePath("/dashboard/documents");
+  return { success: true, bundleId };
+};
+
 const DOCUMENTS_PAGE_SIZE = 10;
 
 export type DocumentListItem = {
@@ -439,8 +590,8 @@ export type DocumentListItem = {
   category: Document["category"];
   customCategoryLabel: string | null;
   createdAt: Date;
-  employeeId: string;
-  employeeName: string;
+  partyId: string;
+  partyName: string;
 };
 
 export type ListDocumentsFilters = {
@@ -448,7 +599,13 @@ export type ListDocumentsFilters = {
   category?: Document["category"];
 };
 
-/** Cross-employee document index for the dashboard's Documents list page. Excludes soft-deleted documents. */
+// Both joins are left joins because a document has exactly one of employeeId/signeeId
+// set (documents_party_check) — an inner join on either alone would silently exclude
+// every document of the other kind.
+const partyIdExpr = sql<string>`coalesce(${documents.employeeId}, ${documents.signeeId})`;
+const partyNameExpr = sql<string>`coalesce(${employees.fullName}, ${signees.fullName})`;
+
+/** Cross-employee/signee document index for the dashboard's Documents list page. Excludes soft-deleted documents. */
 export const listDocuments = async (
   search: string,
   page: number,
@@ -459,11 +616,12 @@ export const listDocuments = async (
   const whereClause = and(
     eq(documents.employerId, profile.id),
     isNull(documents.deletedAt),
-    isNull(employees.deletedAt),
+    or(isNull(documents.employeeId), isNull(employees.deletedAt)),
+    or(isNull(documents.signeeId), isNull(signees.deletedAt)),
     filters.status ? eq(documents.status, filters.status) : undefined,
     filters.category ? eq(documents.category, filters.category) : undefined,
     search
-      ? or(ilike(documents.title, `%${search}%`), ilike(employees.fullName, `%${search}%`))
+      ? or(ilike(documents.title, `%${search}%`), ilike(employees.fullName, `%${search}%`), ilike(signees.fullName, `%${search}%`))
       : undefined,
   );
 
@@ -476,11 +634,12 @@ export const listDocuments = async (
         category: documents.category,
         customCategoryLabel: documents.customCategoryLabel,
         createdAt: documents.createdAt,
-        employeeId: employees.id,
-        employeeName: employees.fullName,
+        partyId: partyIdExpr,
+        partyName: partyNameExpr,
       })
       .from(documents)
-      .innerJoin(employees, eq(documents.employeeId, employees.id))
+      .leftJoin(employees, eq(documents.employeeId, employees.id))
+      .leftJoin(signees, eq(documents.signeeId, signees.id))
       .where(whereClause)
       .orderBy(desc(documents.createdAt))
       .limit(DOCUMENTS_PAGE_SIZE)
@@ -488,7 +647,8 @@ export const listDocuments = async (
     db
       .select({ total: count() })
       .from(documents)
-      .innerJoin(employees, eq(documents.employeeId, employees.id))
+      .leftJoin(employees, eq(documents.employeeId, employees.id))
+      .leftJoin(signees, eq(documents.signeeId, signees.id))
       .where(whereClause),
   ]);
 
@@ -500,9 +660,10 @@ export const getDocumentDetail = async (documentId: string) => {
   const profile = await requireTenantAdmin();
 
   const [row] = await db
-    .select({ document: documents, employeeName: employees.fullName })
+    .select({ document: documents, partyName: partyNameExpr })
     .from(documents)
-    .innerJoin(employees, eq(documents.employeeId, employees.id))
+    .leftJoin(employees, eq(documents.employeeId, employees.id))
+    .leftJoin(signees, eq(documents.signeeId, signees.id))
     .where(and(eq(documents.id, documentId), eq(documents.employerId, profile.id)))
     .limit(1);
 
@@ -516,7 +677,7 @@ export const getDocumentDetail = async (documentId: string) => {
 
   return {
     document: row.document,
-    employeeName: row.employeeName,
+    partyName: row.partyName,
     versions,
     timeline,
     verificationCount,
@@ -619,15 +780,15 @@ export const resendDocumentSigningEmail = async (documentId: string): Promise<Mu
   const document = await getOwnedDocument(documentId, profile.id);
   if (!document) return { success: false, error: "Document not found" };
 
-  const [employee] = await db.select().from(employees).where(eq(employees.id, document.employeeId)).limit(1);
+  const party = await resolveDocumentParty(document);
   const origin = await getAppOrigin();
 
-  if (document.status === "waiting" && document.signingToken && employee?.email) {
+  if (document.status === "waiting" && document.signingToken && party?.email) {
     await sendEmail({
-      to: employee.email,
+      to: party.email,
       subject: `Reminder: ${profile.companyName} — documents to sign`,
       html: signingInvitationEmail({
-        employeeName: employee.fullName,
+        employeeName: party.name,
         companyName: profile.companyName,
         documents: [{ title: document.title, signingUrl: `${origin}/sign/${document.signingToken}` }],
       }),
@@ -636,7 +797,7 @@ export const resendDocumentSigningEmail = async (documentId: string): Promise<Mu
       action: "document.sent",
       actorEmail: profile.email,
       documentId,
-      metadata: { to: employee.email, resent: true },
+      metadata: { to: party.email, resent: true },
     });
     return { success: true };
   }
@@ -650,7 +811,7 @@ export const resendDocumentSigningEmail = async (documentId: string): Promise<Mu
       subject: `Reminder: ${document.title} — ready for your signature`,
       html: employerSignatureNeededEmail({
         documentTitle: document.title,
-        employeeName: employee?.fullName ?? "",
+        employeeName: party?.name ?? "",
         dashboardUrl: `${origin}/dashboard/documents/${document.id}`,
       }),
     });
@@ -809,26 +970,85 @@ export const signAsEmployer = async (
   const ipAddress = headerList.get("x-forwarded-for");
   const userAgent = headerList.get("user-agent");
 
-  const signedPdfBytes = await applySignatureToDocument(new Uint8Array(await pdfData.arrayBuffer()), {
+  const marked = await applySignatureMarks(new Uint8Array(await pdfData.arrayBuffer()), {
     role: "employer",
     layout: document.signatureLayout as SignatureBlockLayout | null,
-    signerLabel: "Pracodawca / Zleceniodawca",
-    signerName: profile.companyName,
     signatureDataUrl,
-    consentText: `Podpis reprezentanta ${profile.companyName} potwierdzający zawarcie oraz akceptację warunków niniejszego dokumentu w imieniu administratora danych osobowych.`,
+    stampUrl: profile.logoUrl,
+  });
+
+  const senderEntry: SignerCertEntry = {
+    roleLabel: document.senderRoleLabel ?? "Pracodawca / Zleceniodawca",
+    name: profile.companyName,
+    email: profile.email,
     signedAt: new Date(),
     ipAddress,
     userAgent,
-    documentTitle: document.title,
-    stampUrl: profile.logoUrl,
-  });
+    consentText: employerConsentText(profile.companyName),
+    signatureImageBytes: dataUrlToBytes(signatureDataUrl),
+  };
+
+  let signedPdfBytes: Uint8Array;
+  if (document.signatureType === "two-party") {
+    // The employee/counterparty already signed (status employee_signed) — that
+    // signature only stamped the marks, with no certificate page yet (see
+    // submitEmployeeSignature). Reconstruct their certificate entry from the
+    // stored signature row so both signers land on one shared certificate page.
+    const [firstSignature] = await db
+      .select()
+      .from(signatures)
+      .where(eq(signatures.documentId, document.id))
+      .orderBy(signatures.signedAt)
+      .limit(1);
+
+    if (!firstSignature) {
+      return { success: false, error: "The counterparty's signature could not be found." };
+    }
+
+    const { data: firstSignatureImage, error: firstSignatureImageError } = await supabase.storage
+      .from(SIGNATURES_BUCKET)
+      .download(firstSignature.imageUrl);
+
+    if (firstSignatureImageError || !firstSignatureImage) {
+      return { success: false, error: "Could not load the counterparty's signature." };
+    }
+
+    const counterparty = await resolveDocumentParty(document);
+    const counterpartyEntry: SignerCertEntry = {
+      roleLabel: document.counterpartyRoleLabel ?? "Pracownik / Zleceniobiorca",
+      name: counterparty?.name ?? firstSignature.signerEmail,
+      email: counterparty?.email ?? firstSignature.signerEmail,
+      signedAt: firstSignature.signedAt,
+      ipAddress: firstSignature.ipAddress,
+      userAgent: firstSignature.userAgent,
+      consentText: counterpartyConsentText(profile.companyName),
+      signatureImageBytes: new Uint8Array(await firstSignatureImage.arrayBuffer()),
+    };
+
+    signedPdfBytes = await appendCertificatePage(marked, {
+      documentId: document.id,
+      documentTitle: document.title,
+      sha256Hash: document.sha256Hash,
+      signers: [counterpartyEntry, senderEntry],
+    });
+  } else {
+    signedPdfBytes = await appendCertificatePage(marked, {
+      documentId: document.id,
+      documentTitle: document.title,
+      sha256Hash: document.sha256Hash,
+      signers: [senderEntry],
+    });
+  }
+
+  // documents_party_check guarantees exactly one of these is set.
+  const partyId = document.employeeId ?? document.signeeId;
 
   // document.kind is null for every template-generated document — falling back to
   // document.id keeps each document's final PDF at its own storage key instead of
   // multiple documents in the same bundle colliding on "null-final.pdf" and
   // overwriting each other's signed contract (see signing-actions.ts's employee-side
   // upload path, which uses the same fallback for the same reason).
-  const finalPath = `${document.employerId}/${document.employeeId}/${document.bundleId}/${document.kind ?? document.id}-final.pdf`;
+  const finalPath = `${document.employerId}/${partyId}/${document.bundleId}/${document.kind ?? document.id}-final.pdf`;
   const finalPdfBytes = await embedVerificationQr(
     signedPdfBytes,
     `${await getAppOrigin()}/verify/${document.id}`,
@@ -841,7 +1061,7 @@ export const signAsEmployer = async (
     return { success: false, error: uploadError.message };
   }
 
-  const signatureImagePath = `${document.employerId}/${document.employeeId}/${document.id}-employer.png`;
+  const signatureImagePath = `${document.employerId}/${partyId}/${document.id}-employer.png`;
   const signatureBase64 = signatureDataUrl.split(",")[1] ?? "";
   await supabase.storage
     .from(SIGNATURES_BUCKET)
@@ -879,20 +1099,15 @@ export const signAsEmployer = async (
     actorEmail: profile.email,
   });
 
-  const [employee] = await db
-    .select()
-    .from(employees)
-    .where(eq(employees.id, document.employeeId))
-    .limit(1);
-
-  if (employee?.email) {
+  const party = await resolveDocumentParty(document);
+  if (party?.email) {
     await sendEmail({
-      to: employee.email,
+      to: party.email,
       subject: `${document.title} — completed`,
-      html: documentCompletedEmail({ documentTitle: document.title, recipientName: employee.fullName }),
+      html: documentCompletedEmail({ documentTitle: document.title, recipientName: party.name }),
     });
   }
 
-  revalidatePath(`/dashboard/employees/${document.employeeId}/documents`);
+  revalidatePath(document.employeeId ? `/dashboard/employees/${document.employeeId}/documents` : "/dashboard/documents");
   return { success: true };
 };
