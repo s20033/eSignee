@@ -125,8 +125,12 @@ export type SignatureBlockLayout = {
   employee: SignatureRect | null;
 };
 
-const STAMP_SIZE = 45;
-const SIGNATURE_SLOT_HEIGHT = 60;
+// ~35mm (a standard round company stamp/seal) — 45pt (~16mm) read as a tiny
+// icon next to a full-size signature rather than an actual stamp impression.
+const STAMP_SIZE = 100;
+// Padded 20pt beyond STAMP_SIZE (10pt clearance above and below) so the stamp
+// never touches the party label above it or the signature line below it.
+const SIGNATURE_SLOT_HEIGHT = STAMP_SIZE + 20;
 // A real pen signature sits roughly 10-14mm tall above the line — capping the
 // image here (independent of SIGNATURE_SLOT_HEIGHT, which only reserves layout
 // space for the label + stamp) keeps scaleToFit from blowing it up to fill the slot.
