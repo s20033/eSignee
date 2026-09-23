@@ -131,10 +131,14 @@ const STAMP_SIZE = 100;
 // Padded 20pt beyond STAMP_SIZE (10pt clearance above and below) so the stamp
 // never touches the party label above it or the signature line below it.
 const SIGNATURE_SLOT_HEIGHT = STAMP_SIZE + 20;
-// A real pen signature sits roughly 10-14mm tall above the line — capping the
+// A real pen signature sits roughly 8-10mm tall above the line — capping the
 // image here (independent of SIGNATURE_SLOT_HEIGHT, which only reserves layout
 // space for the label + stamp) keeps scaleToFit from blowing it up to fill the slot.
-const SIGNATURE_IMAGE_MAX_HEIGHT = 32;
+// Applies to both drawn and typed signatures — scaleToFit always maximizes a
+// signature to fill this box (it's a high-res source image being downscaled),
+// so this cap is what actually controls the printed size, not the font size
+// used to originally draw a typed one.
+const SIGNATURE_IMAGE_MAX_HEIGHT = 28;
 
 /**
  * Draws the "who signs where" block on the current page and returns the coordinates

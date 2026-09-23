@@ -18,7 +18,7 @@ export type SignaturePadHandle = {
 const CANVAS_WIDTH = 320;
 const CANVAS_HEIGHT = 140;
 const TRIM_PADDING = 10;
-const TYPED_FONT_SIZE = 16;
+const TYPED_FONT_SIZE = 13;
 
 /**
  * Crops a canvas down to the bounding box of its non-transparent pixels so the

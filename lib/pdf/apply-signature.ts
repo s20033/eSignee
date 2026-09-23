@@ -5,8 +5,8 @@ import { PAGE_WIDTH, PAGE_HEIGHT, MARGIN, CONTENT_WIDTH, COLORS, type SignatureB
 
 // Real handwritten signatures read as small marks, not blown-up graphics — this cap
 // keeps pdf-lib's scaleToFit from stretching the certificate-page copy to fill its box.
-const CERT_SIGNATURE_MAX_WIDTH = 120;
-const CERT_SIGNATURE_MAX_HEIGHT = 36;
+const CERT_SIGNATURE_MAX_WIDTH = 100;
+const CERT_SIGNATURE_MAX_HEIGHT = 28;
 
 export const dataUrlToBytes = (dataUrl: string): Uint8Array => {
   const base64 = dataUrl.split(",")[1] ?? "";
